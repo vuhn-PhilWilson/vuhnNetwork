@@ -26,6 +26,11 @@ matrix:
       sudo: required
       services: docker
       env: DOCKER_IMAGE=swift:5.1-bionic SWIFT_SNAPSHOT=5.1
+      - os: linux
+        dist: disco
+        sudo: required
+        services: docker
+        env: DOCKER_IMAGE=swift:5.1-disco SWIFT_SNAPSHOT=5.1
     - os: osx
       osx_image: xcode11
       sudo: required
