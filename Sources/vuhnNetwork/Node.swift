@@ -6,32 +6,40 @@
 //
 
 import Foundation
+import Socket
 
-class Node {
+public class Node {
     
-    var address: String
-    var port: String
+    public enum ConnectionType {
+        case outBound
+        case inBound
+        case unknown
+    }
+
+    var sentVersion = false
+    var sentVerAck = false
+    var sentPing = false
+    var sentPong = false
     
-    public init(address: String, port: String = "8333") {
-        self.port = port
-        self.address = address
-        var splitAddress = address.split(separator: ":")
-        if splitAddress.count == 1 {
-            // Address is only the address portion
-            self.address = address
-        } else if splitAddress.count == 2 {
-            // Address is IPV4 including port suffix
-            self.address = String(splitAddress[0])
-            self.port = String(splitAddress[1])
-        }
-        else if splitAddress.count == 6 {
-            // Address is IPV6 without port suffix
-            self.address = address.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        }
-        else if splitAddress.count == 7 {
-            // Address is IPV6 with port suffix
-            self.port = String(splitAddress.removeLast())
-            self.address = String(splitAddress.joined(separator: ":")).trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        }
+    var receivedVersion = false
+    var receivedVerAck = false
+    var receivedPing = false
+    var receivedPong = false
+    
+    var lastPingReceivedTimeInterval: TimeInterval
+    
+    public var address: String
+    public var port: Int32
+    var socket: Socket?
+    public var connectionType = ConnectionType.unknown
+    
+    public var sentNetworkUpdateType = NetworkUpdateType.unknown
+    public var receivedNetworkUpdateType = NetworkUpdateType.unknown
+    
+    public init(address: String, port: Int32 = 8333) {
+        let (anAddress, aPort) = NetworkAddress.extractAddress(address, andPort: port)
+        self.address = anAddress
+        self.port = aPort
+        self.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
     }
 }
