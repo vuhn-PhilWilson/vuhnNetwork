@@ -1,5 +1,12 @@
 
 import Dispatch
+import Foundation
+
+#if os(Linux)
+    import Glibc
+#else
+    import Darwin
+#endif
 
 struct vuhnNetwork {
     var text = "Hello, World!"
@@ -11,7 +18,6 @@ var consoleUpdateHandler: (([String: NetworkUpdate],Error?) -> Void)?
 public func makeOutBoundConnections(to addresses: [String], listenPort: Int = 8333, updateHandler: (([String: NetworkUpdate],Error?) -> Void)?)
 {
     consoleUpdateHandler = updateHandler
-
     let signalInteruptHandler = setUpInterruptHandling()
     signalInteruptHandler.resume()
 
