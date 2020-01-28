@@ -51,7 +51,6 @@ class ConnectionsManager {
 
     public init(addresses: [String], listenPort: Int = 8333, updateHandler: (([String: NetworkUpdate],Error?) -> Void)?) {
         self.updateHandler = updateHandler
-        print("listenPort = \(listenPort)")
         self.port = listenPort
         for address in addresses {
             if ConnectionsManager.isValidAddress(address: address) {
@@ -95,13 +94,9 @@ class ConnectionsManager {
                 }
                 
                 try socket.listen(on: self.port)
-                print("Listening on port: \(socket.listeningPort)")
                 
                 repeat {
                     let newSocket = try socket.acceptClientConnection()
-                    
-                    print("Accepted connection from: \(newSocket.remoteHostname) on port \(newSocket.remotePort)")
-                    print("Socket Signature: \(String(describing: newSocket.signature?.description))")
 
                     // Set how long we'll wait with no received
                     // data before we Ping the remote node
@@ -134,15 +129,12 @@ class ConnectionsManager {
     }
     
     func connectToAllNodes() {
-        print("connectToAllNodes")
         for node in nodes {
             connectToNode(node: node)
         }
     }
     
     func connectToNode(node: Node) {
-        print("connect to node \(node.address):\(node.port)")
-
         do {
             let newNodeSocket = try Socket.create(family: .inet)
             // What buffer size shall we use ?
@@ -193,13 +185,9 @@ class ConnectionsManager {
         queue.async { [unowned self, socket] in
             
             var shouldKeepRunning = true
-            
             var readData = Data(capacity: EchoServer.bufferSize)
             
             do {
-                // Write the welcome string...
-                //try socket.write(from: "Hello, type 'QUIT' to end session\nor 'SHUTDOWN' to stop server.\n")
-
                 var networkUpdate = NetworkUpdate(type: .connected, level: .information, error: .allFine)
                 networkUpdate.node = node
                 self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -209,7 +197,6 @@ class ConnectionsManager {
                     // If we've never sent Version message, send it now
                     if node.sentVersion == false {
                         node.sentVersion = true
-//                        print("Sending Version")
                         networkUpdate = NetworkUpdate(type: .sentVersion, level: .success, error: .allFine)
                         networkUpdate.node = node
                         self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -224,12 +211,10 @@ class ConnectionsManager {
                         && elapsedTime > (Constants.pingDuration / 1000) {
                         node.sentPing = true
                         node.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
-//                        print("Sending Ping")
                         networkUpdate = NetworkUpdate(type: .sentPing, level: .success, error: .allFine)
                         networkUpdate.node = node
                         self.updateHandler?(["\(node.address)":networkUpdate], nil)
                         try socket.write(from: "Ping")
-                        // continue
                     }
                     
                     // Read incoming data
@@ -237,28 +222,21 @@ class ConnectionsManager {
                     
                     if bytesRead > 0 {
                         guard let response = String(data: readData, encoding: .utf8) else {
-                            
                             print("Error decoding response...")
                             readData.count = 0
                             break
                         }
 
                         if response.hasPrefix(EchoServer.shutdownCommand) {
-                            
                             print("Shutdown requested by connection at \(socket.remoteHostname):\(socket.remotePort)")
-                            
                             // Shut things down...
                             self.shutdownServer()
-
                             DispatchQueue.main.sync {
                                 exit(0)
                             }
                         }
-
-//                        print("Server received from connection at \(socket.remoteHostname):\(socket.remotePort): \(response) ")
                         
                         if response.hasPrefix("Version") {
-//                            print("Received Version")
                             networkUpdate = NetworkUpdate(type: .receivedVersion, level: .success, error: .allFine)
                             networkUpdate.node = node
                             self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -271,7 +249,6 @@ class ConnectionsManager {
     
                             node.sentNetworkUpdateType = .sentVerAck
                             node.sentVerAck = true
-//                            print("Sending VerAck")
                             networkUpdate = NetworkUpdate(type: .sentVerAck, level: .success, error: .allFine)
                             networkUpdate.node = node
                             self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -279,7 +256,6 @@ class ConnectionsManager {
                         }
                         
                         if response.hasPrefix("VerAck") {
-//                            print("Received VerAck")
                             networkUpdate = NetworkUpdate(type: .receivedVerAck, level: .success, error: .allFine)
                             networkUpdate.node = node
                             self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -292,7 +268,6 @@ class ConnectionsManager {
                         }
                         
                         if response.hasPrefix("Ping") {
-                            print("Received Ping")
                             networkUpdate = NetworkUpdate(type: .receivedPing, level: .success, error: .allFine)
                             networkUpdate.node = node
                             self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -301,7 +276,6 @@ class ConnectionsManager {
                             
                             node.sentNetworkUpdateType = .sentPong
                             node.sentPong = true
-                            print("Sending Pong")
                             networkUpdate = NetworkUpdate(type: .sentPong, level: .success, error: .allFine)
                             networkUpdate.node = node
                             self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -309,7 +283,6 @@ class ConnectionsManager {
                         }
                         
                         if response.hasPrefix("Pong") {
-                            print("Received Pong")
                             networkUpdate = NetworkUpdate(type: .receivedPong, level: .success, error: .allFine)
                             networkUpdate.node = node
                             self.updateHandler?(["\(node.address)":networkUpdate], nil)
@@ -319,18 +292,7 @@ class ConnectionsManager {
                             // Compare Nonce with the one we sent
                             // Only if this remote node uses Nonces with Ping/Pong
                         }
-                        
-//                        let reply = "Server response: \n\(response)\n"
-//                        try socket.write(from: reply)
-                        
-//                        if (response.uppercased().hasPrefix(EchoServer.quitCommand) || response.uppercased().hasPrefix(EchoServer.shutdownCommand)) &&
-//                            (!response.hasPrefix(EchoServer.quitCommand) && !response.hasPrefix(EchoServer.shutdownCommand)) {
-//
-//                            try socket.write(from: "If you want to QUIT or SHUTDOWN, please type the name in all caps. 😃\n")
-//                        }
-                        
                         if response.hasPrefix(EchoServer.quitCommand) || response.hasSuffix(EchoServer.quitCommand) {
-                            
                             shouldKeepRunning = false
                         }
                     }
@@ -345,14 +307,17 @@ class ConnectionsManager {
                     
                 } while shouldKeepRunning
                 
-                print("Socket: \(socket.remoteHostname):\(socket.remotePort) closed...")
+                networkUpdate = NetworkUpdate(type: .socketClosing, level: .information, error: .allFine)
+                networkUpdate.node = node
+                self.updateHandler?(["information":networkUpdate], nil)
                 socket.close()
-                
-                print("Removing this socket from socket array")
+                networkUpdate = NetworkUpdate(type: .socketClosed, level: .information, error: .allFine)
+                networkUpdate.node = node
+                self.updateHandler?(["information":networkUpdate], nil)
+
                 self.socketLockQueue.sync { [unowned self, socket] in
                     self.connectedSockets[socket.socketfd] = nil
                 }
-                
             }
             catch let error {
                 guard let socketError = error as? Socket.Error else {

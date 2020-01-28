@@ -14,6 +14,14 @@ public class Node {
         case outBound
         case inBound
         case unknown
+        
+        public func displayText() -> String {
+            switch self {
+            case .outBound: return "outBound"
+            case .inBound: return " inBound"
+            case .unknown: return "unknown"
+            }
+        }
     }
 
     var sentVersion = false

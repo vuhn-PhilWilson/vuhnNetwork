@@ -90,7 +90,7 @@ public enum NetworkUpdateError {
 
 public struct NetworkUpdate {
     public var node: Node? = nil
-    let type: NetworkUpdateType
+    public let type: NetworkUpdateType
     let level: NetworkUpdateLevel
     let error: NetworkUpdateError
 }
