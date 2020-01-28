@@ -1,16 +1,47 @@
 
-// https://github.com/IBM-Swift/BlueSocket
+import Dispatch
+import Foundation
+
+#if os(Linux)
+    import Glibc
+#else
+    import Darwin
+#endif
 
 struct vuhnNetwork {
     var text = "Hello, World!"
 }
 
-public func runEchoServer()
-{
-    let port = 1337
-    let echoServer = EchoServer(port: port)
-    print("Swift Echo Server Sample")
-    print("Connect with a command line window by entering 'telnet ::1 \(port)' or macOS `nc ::1 \(port)`")
+var connectionsManager: ConnectionsManager?
+var consoleUpdateHandler: (([String: NetworkUpdate],Error?) -> Void)?
 
-    echoServer.run()
+public func makeOutBoundConnections(to addresses: [String], listenPort: Int = 8333, updateHandler: (([String: NetworkUpdate],Error?) -> Void)?)
+{
+    consoleUpdateHandler = updateHandler
+    let signalInteruptHandler = setUpInterruptHandling()
+    signalInteruptHandler.resume()
+
+    connectionsManager = ConnectionsManager(addresses: addresses, listenPort: listenPort) { (dictionary, error) in
+        // Supply update information to commandline
+        consoleUpdateHandler?(dictionary, error)
+    }
+    
+    connectionsManager?.run()
+}
+
+private func setUpInterruptHandling() -> DispatchSourceSignal {
+    // Make sure the ctrl+c signal does not terminate the application.
+    signal(SIGINT, SIG_IGN)
+
+    let signalInteruptSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    signalInteruptSource.setEventHandler {
+        print("")
+        var networkUpdate = NetworkUpdate(type: .receivedInterruptSignal, level: .information, error: .allFine)
+        consoleUpdateHandler?(["information":networkUpdate], nil)
+        connectionsManager?.close()
+        networkUpdate = NetworkUpdate(type: .shutDown, level: .information, error: .allFine)
+        consoleUpdateHandler?(["information":networkUpdate], nil)
+        exit(0)
+    }
+    return signalInteruptSource
 }
