@@ -37,28 +37,45 @@ public func makeOutBoundConnections(to addresses: [String], listenPort: Int = 83
                                  startHeight: -1,
                                  relay: false)
                                  
-//    print("version = \(version)")
-    let sentMessage = Message(command: .Version, payload: version.serialize())
-//    print("sentMessage = \(sentMessage)")
-    let data = sentMessage.serialize()
+    print("version = \(version)\n")
+    
+    var sentMessage = Message(command: .Version, payload: version.serialize())
+    print("sentMessage = \(sentMessage)\n")
+    var data = sentMessage.serialize()
 //    print("sentMessage data = \(data)")
     
 
     // Extract Message data
 
-    let byteArray = Array([UInt8](data))
+    var byteArray = Array([UInt8](data))
     
-    let receivedMessage = Message.deserialise(byteArray, length: UInt32(data.count))
+    var receivedMessage = Message.deserialise(byteArray, length: UInt32(data.count))
 //    let receivedMessage = Message.deserialise(data)
-//    print("receivedMessage = \(receivedMessage)")
+    print("receivedMessage = \(receivedMessage)\n")
     
 
     // Extract Version Message data
-    if let payload = receivedMessage?.payload {
-        let payloadCopy = Data(payload)
-        let receivedVersionMessage = VersionMessage.deserialise(payloadCopy)
-//        print("receivedVersionMessage = \(receivedVersionMessage)")
-    }
+    guard let payload = receivedMessage?.payload else { exit(0) }
+        
+    let payloadCopy = Data(payload)
+        
+    let receivedVersionMessage = VersionMessage.deserialise(payloadCopy)
+    print("receivedVersionMessage = \(receivedVersionMessage)\n")
+    
+    //============================================================================
+    
+    let verAckMessage = VerAckMessage()
+    print("verAckMessage = \(verAckMessage)\n")
+    
+    sentMessage = Message(command: .VerAck, payload: verAckMessage.serialize())
+    print("sentMessage = \(sentMessage)\n")
+    data = sentMessage.serialize()
+    
+    byteArray = Array([UInt8](data))
+    
+    receivedMessage = Message.deserialise(byteArray, length: UInt32(data.count))
+    print("receivedMessage = \(receivedMessage)\n")
+    
     
     exit(0)
     

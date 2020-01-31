@@ -66,7 +66,7 @@ public struct Message: Codable {
         data += command.toData
         data += withUnsafeBytes(of: UInt32(payload.count).littleEndian) { Data($0) }
         data += checksum
-        print("checksum = <\(Array([UInt8](checksum)))>")
+//        print("checksum = <\(Array([UInt8](checksum)))>")
 
         
         data += payload
@@ -77,9 +77,15 @@ public struct Message: Codable {
         var offset = 0
         var size = MemoryLayout<UInt32>.size
         
-        let magic = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
+        let magic = uint8Array[offset..<(offset + size)].reduce(0) { soFar, byte in
             return soFar << 8 | UInt32(byte)
         }
+        
+        guard magic == 0xe3e1f3e8 else {
+            print("magic != 0xe3e1f3e8\nmagic == \(magic)")
+            return nil
+        }
+        print("magic == 0xe3e1f3e8")
         
         offset += size
         size = MemoryLayout<UInt8>.size * 12

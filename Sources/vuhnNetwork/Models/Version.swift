@@ -4,6 +4,7 @@
 //
 //  Created by Phil Wilson on 29/1/20.
 //
+// https://en.bitcoin.it/wiki/Protocol_documentation#version
 
 import Foundation
 
