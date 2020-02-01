@@ -30,8 +30,8 @@ public struct NetworkAddress {
         data += withUnsafeBytes(of: port.bigEndian) { Data($0) }
         return data
     }
-
-    public static func deserialize( data: Data, offset: Int) -> (newAddress: NetworkAddress, updatedOffset: Int) {
+/*
+    public static func deserialise( data: Data, offset: Int) -> (newAddress: NetworkAddress, updatedOffset: Int) {
         var offset = offset
         var size = MemoryLayout<UInt64>.size
         let services = data[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
@@ -58,7 +58,36 @@ public struct NetworkAddress {
         offset += size
         return (newNetworkAddress, offset)
     }
-    
+    */
+    public static func deserialise(_ uint8Array: [UInt8], arrayLength: UInt32, offset: Int) -> (newAddress: NetworkAddress, updatedOffset: Int) {
+        var offset = offset
+        var size = MemoryLayout<UInt64>.size
+        let services = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
+            return soFar << 8 | UInt64(byte)
+        }
+//        print("services = \(services)")
+
+        offset += size
+        size = MemoryLayout<UInt8>.size * 16
+        let addressArray = Array(uint8Array[offset..<(offset + size)])
+//        print("addressArray = <\(addressArray)>")
+        
+//        let addressData = Data(addressArray)
+        let address = parseIP(addressArray)
+//        let address = parseIP(data: addressData)
+        
+        offset += size
+        size = MemoryLayout<UInt16>.size
+        let port = uint8Array[offset..<(offset + size)].reduce(0) { soFar, byte in
+            return soFar << 8 | UInt16(byte)
+        }
+//        print("port = \(port)")
+        
+        let newNetworkAddress = NetworkAddress(services: services, address: address, port: port)
+        offset += size
+        return (newNetworkAddress, offset)
+    }
+    /*
     private static func parseIP(data: Data) -> String {
 //        print("parseIP")
         let address = ipv6(from: data)
@@ -69,15 +98,36 @@ public struct NetworkAddress {
             return address
         }
     }
-    private static func ipv4(from data: Data) -> String {
-        return Data(data.dropFirst(12)).map { String($0) }.joined(separator: ".")
+*/
+        
+    private static func parseIP(_ uint8Array: [UInt8]) -> String {
+//        print("parseIP")
+        let address = ipv6(uint8Array)
+//        print("parseIP address = \(address)")
+        if address.hasPrefix("0000:0000:0000:0000:0000:ffff") {
+            return "0000:0000:0000:0000:0000:ffff:" + ipv4(uint8Array)
+        } else {
+            return address
+        }
     }
 
-    private static func ipv6(from data: Data) -> String {
-        return stride(from: 0, to: data.count - 1, by: 2).map { Data([data[$0], data[$0 + 1]]).hex }.joined(separator: ":")
+    private static func ipv4(_ uint8Array: [UInt8]) -> String {
+        return Data(uint8Array.dropFirst(12)).map { String($0) }.joined(separator: ".")
     }
+
+    private static func ipv6(_ uint8Array: [UInt8]) -> String {
+        return stride(from: 0, to: 16 - 1, by: 2).map { String(format: "%02x%02x", uint8Array[$0], uint8Array[$0 + 1]) }.joined(separator: ":")
+    }
+        
+//    private static func ipv4(from data: Data) -> String {
+//        return Data(data.dropFirst(12)).map { String($0) }.joined(separator: ".")
+//    }
+
+//    private static func ipv6(from data: Data) -> String {
+//        return stride(from: 0, to: data.count - 1, by: 2).map { Data([data[$0], data[$0 + 1]]).hex }.joined(separator: ":")
+//    }
     
-    static public func extractAddress(_ address: String, andPort port: Int32 = 8333) -> (address: String, port: Int32) {
+    static public func extractAddress(_ address: String, andPort port: UInt16 = 8333) -> (address: String, port: UInt16) {
         var portString = "\(port)"
         var returnPort = port
         var returnAddress = address
@@ -99,7 +149,7 @@ public struct NetworkAddress {
             portString = String(splitAddress.removeLast())
             returnAddress = String(splitAddress.joined(separator: ":")).trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         }
-        if let portInt = Int32(portString) {
+        if let portInt = UInt16(portString) {
             returnPort = portInt
         }
         return (returnAddress, returnPort)

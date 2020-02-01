@@ -16,6 +16,7 @@ public enum CommandType: String, Codable {
     case Pong
     
     // Command string is a maximum 12 characters long
+    // Needs to pad with 0x00, not " "
     var toData: Data {
         return self.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0).data(using: .utf8)!
 //        return Data(self.rawValue.padding(toLength: 12, withPad: "", startingAt: 0))
@@ -42,7 +43,8 @@ public struct Message: Codable {
     /// and used to seek to next message when stream state is unknown
     public var magic: UInt32 = 0xe3e1f3e8
     
-    /// ASCII string identifying the packet content, NULL padded (non-NULL padding results in packet rejected)
+    /// ASCII string identifying the packet content, NULL padded
+    /// (non-NULL padding results in packet rejected)
     public var command: CommandType
     
     /// Length of payload in number of bytes
@@ -73,7 +75,7 @@ public struct Message: Codable {
         return data
     }
     
-    public static func deserialise(_ uint8Array: [UInt8], length :UInt32) -> Message? {
+    public static func deserialise(_ uint8Array: [UInt8], arrayLength: UInt32) -> Message? {
         var offset = 0
         var size = MemoryLayout<UInt32>.size
         
@@ -85,7 +87,7 @@ public struct Message: Codable {
             print("magic != 0xe3e1f3e8\nmagic == \(magic)")
             return nil
         }
-        print("magic == 0xe3e1f3e8")
+//        print("magic == 0xe3e1f3e8")
         
         offset += size
         size = MemoryLayout<UInt8>.size * 12
@@ -99,7 +101,7 @@ public struct Message: Codable {
         offset += size
         size = MemoryLayout<UInt8>.size * 4
         var checksum = Array(uint8Array[offset..<(offset + size)])
-        print("checksum = <\(checksum)>")
+//        print("checksum = <\(checksum)>")
 //        checksum[2] = 0xee
 //        print("checksum changed = <\(checksum)>")
         
@@ -110,12 +112,12 @@ public struct Message: Codable {
         
         // Confirm checksum is correct
         let checksumFromPayload =  Array(payload.doubleSHA256ToData[0..<4])
-        print("checksumFromPayload = <\(checksumFromPayload)>")
+//        print("checksumFromPayload = <\(checksumFromPayload)>")
         var checksumConfirmed = true
         for (index, element) in checksumFromPayload.enumerated() {
             if checksum[index] != element { checksumConfirmed = false; break }
         }
-        print("checksumConfirmed = <\(checksumConfirmed)>")
+//        print("checksumConfirmed = <\(checksumConfirmed)>")
         
         let newMessage = Message(magic: magic, command: CommandType(rawValue: command) ?? .Unknown, payload: payload)
         return newMessage

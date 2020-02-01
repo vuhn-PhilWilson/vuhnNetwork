@@ -21,7 +21,8 @@ public func makeOutBoundConnections(to addresses: [String], listenPort: Int = 83
     
 //    testSha256Hashing()
 //    testSha256HashingData()
-    
+    /*
+    print("============================================================================")
     let port: UInt16 = 8333
     let version = VersionMessage(version: protocolVersion,
                                  services: 0x00,
@@ -55,14 +56,13 @@ public func makeOutBoundConnections(to addresses: [String], listenPort: Int = 83
     
 
     // Extract Version Message data
-    guard let payload = receivedMessage?.payload else { exit(0) }
-        
-    let payloadCopy = Data(payload)
+    guard var versionPayload = receivedMessage?.payload else { exit(0) }
+    var payloadCopy = Data(versionPayload)
         
     let receivedVersionMessage = VersionMessage.deserialise(payloadCopy)
     print("receivedVersionMessage = \(receivedVersionMessage)\n")
     
-    //============================================================================
+    print("============================================================================")
     
     let verAckMessage = VerAckMessage()
     print("verAckMessage = \(verAckMessage)\n")
@@ -76,15 +76,64 @@ public func makeOutBoundConnections(to addresses: [String], listenPort: Int = 83
     receivedMessage = Message.deserialise(byteArray, length: UInt32(data.count))
     print("receivedMessage = \(receivedMessage)\n")
     
+    print("============================================================================")
+    
+    let pingMessage = PingMessage(nonce: 12345678)
+    print("pingMessage = \(pingMessage)\n")
+    
+    sentMessage = Message(command: .Ping, payload: pingMessage.serialize())
+    print("sentMessage = \(sentMessage)\n")
+    data = sentMessage.serialize()
+    
+    byteArray = Array([UInt8](data))
+    
+    receivedMessage = Message.deserialise(byteArray, length: UInt32(data.count))
+    print("receivedMessage = \(receivedMessage)\n")
+    
+    
+    // Extract Ping Message data
+    guard let pingPayload = receivedMessage?.payload else { exit(0) }
+    payloadCopy = Data(pingPayload)
+        
+        let receivedPingMessage = PingMessage.deserialise(payloadCopy)
+    print("receivedPingMessage = \(receivedPingMessage)\n")
+    
+    print("============================================================================")
+    
+    let pongMessage = PongMessage(nonce: receivedPingMessage.nonce)
+    print("pongMessage = \(pongMessage)\n")
+    
+    sentMessage = Message(command: .Pong, payload: pongMessage.serialize())
+    print("sentMessage = \(sentMessage)\n")
+    data = sentMessage.serialize()
+    
+    byteArray = Array([UInt8](data))
+    
+    receivedMessage = Message.deserialise(byteArray, length: UInt32(data.count))
+    print("receivedMessage = \(receivedMessage)\n")
+    
+    
+    // Extract Pong Message data
+    guard let pongPayload = receivedMessage?.payload else { exit(0) }
+    payloadCopy = Data(pongPayload)
+        
+        let receivedPongMessage = PongMessage.deserialise(payloadCopy)
+    print("receivedPongMessage = \(receivedPongMessage)\n")
+    print("============================================================================")
+    
+    
     
     exit(0)
+    */
     
     let signalInteruptHandler = setUpInterruptHandling()
     signalInteruptHandler.resume()
 
     connectionsManager = ConnectionsManager(addresses: addresses, listenPort: listenPort) { (dictionary, error) in
         // Supply update information to commandline
-        consoleUpdateHandler?(dictionary, error)
+        DispatchQueue.main.async {
+            consoleUpdateHandler?(dictionary, error)
+        }
     }
     
     connectionsManager?.run()
