@@ -29,10 +29,10 @@ public struct PingMessage {
 //    }
     
     public static func deserialise(_ uint8Array: [UInt8]) -> PingMessage {
-        var offset = 0
-        var size = MemoryLayout<UInt64>.size
+        let offset = 0
+        let size = MemoryLayout<UInt64>.size
         
-        let nonce = uint8Array[offset..<(offset + size)].reduce(0) { soFar, byte in
+        let nonce = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | UInt64(byte)
         }
         return PingMessage(nonce: nonce)

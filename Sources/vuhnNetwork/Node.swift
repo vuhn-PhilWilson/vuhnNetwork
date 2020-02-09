@@ -25,16 +25,18 @@ public class Node {
     }
 
     var sentVersion = false
-    var sentVerAck = false
+    var sentVerack = false
     var sentPing = false
     var sentPong = false
     
     var receivedVersion = false
-    var receivedVerAck = false
+    var receivedVerack = false
     var receivedPing = false
     var receivedPong = false
     
     var lastPingReceivedTimeInterval: TimeInterval
+    
+    public var packageData: Data
     
     public var address: String
     public var port: UInt16
@@ -51,7 +53,7 @@ public class Node {
     var services: UInt64
     
     var theirNodePingNonce: UInt64?
-    let myPingNonce: UInt64?
+    var myPingNonce: UInt64?
     
     /// User Agent (0x00 if string is 0 bytes long)
     /// The user agent that generated messsage.
@@ -88,5 +90,6 @@ public class Node {
         self.startHeight = nil
         self.relay = nil
         self.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
+        self.packageData = Data()
     }
 }

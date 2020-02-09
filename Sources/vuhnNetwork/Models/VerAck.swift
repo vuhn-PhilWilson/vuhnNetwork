@@ -1,5 +1,5 @@
 //
-//  VerAck.swift
+//  Verack.swift
 //  
 //
 //  Created by Phil Wilson on 31/1/20.
@@ -10,7 +10,7 @@ import Foundation
 
 /// The verack message is sent in reply to version.
 /// This message consists of only a message header with the command string "verack".
-public struct VerAckMessage {
+public struct VerackMessage {
 //    Hexdump of the verack message:
 //
 //    0000   F9 BE B4 D9 76 65 72 61  63 6B 00 00 00 00 00 00   ....verack......

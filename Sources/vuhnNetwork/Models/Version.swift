@@ -10,12 +10,28 @@ import Foundation
 
 let protocolVersion: Int32 = 70_015
 let yourUserAgent = "&/vuhnBitcoin:0.0.1(EB32.0; Vuhn; Pay; Vend)/"
+//let yourUserAgent = "/Bitcoin ABC:0.19.11(EB32.0)/"
 
-func generateNone() -> UInt64 {
-    let bigjj: UInt64 = 11343181173557241065
+
+extension UInt64 {
+    func toUInt8Array() -> [UInt8] {
+        var temp = self
+        let count = MemoryLayout<UInt64>.size
+        let bytePtr = withUnsafePointer(to: &temp) {
+            $0.withMemoryRebound(to: UInt8.self, capacity: count) {
+                UnsafeBufferPointer(start: $0, count: count)
+            }
+        }
+        return Array(bytePtr)
+    }
+}
+
+func generateNonce() -> UInt64 {
     var returnValue: UInt64 = 1
-    for iteration in 0..<42 {
-        returnValue *= UInt64.random(in: 1 ... 42)
+    let size = MemoryLayout<UInt64>.size
+    for shift in (0..<size-1).reversed() {
+        let randomByte = UInt8.random(in: 1 ... 255)
+        returnValue |= UInt64(randomByte) << (shift * 8)
     }
     return returnValue
 }
@@ -63,18 +79,26 @@ public struct VersionMessage {
     public func serialize() -> Data {
         var data = Data()
         data += withUnsafeBytes(of: version.littleEndian) { Data($0) }
+        print("version = \(version)")
         data += withUnsafeBytes(of: services.littleEndian) { Data($0) }
+        print("services = \(services)")
         data += withUnsafeBytes(of: timestamp.littleEndian) { Data($0) }
+        print("timestamp = \(timestamp)")
         data += receivingAddress.serialize()
+        print("receivingAddress = \(receivingAddress)")
         data += emittingAddress?.serialize() ?? Data(count: 26)
+        print("emittingAddress = \(emittingAddress)")
         data += withUnsafeBytes(of: nonce?.littleEndian ?? UInt64(0)) { Data($0) }
+        print("nonce = \(nonce)")
         if let userAgent = userAgent {
             data += withUnsafeBytes(of: UInt8(userAgent.count)) { Data($0) }
             data += userAgent.data(using: .utf8) ?? Data([UInt8(0x00)])
         } else {
             data += withUnsafeBytes(of: Data([UInt8(0x00)])) { Data($0) }
         }
+        print("userAgent = \(userAgent)")
         data += withUnsafeBytes(of: startHeight?.littleEndian ?? Int32(0)) { Data($0) }
+        print("startHeight = \(startHeight)")
         if let relay = relay {
             data += relay == true ? Data([UInt8(0x01)]) : Data([UInt8(0x00)])
         } else {
@@ -90,38 +114,42 @@ public struct VersionMessage {
         let version = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | Int32(byte)
         }
+        print("version = \(version)")
 
         offset += size
         size = MemoryLayout<UInt64>.size
         let services = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | UInt64(byte)
         }
+        print("services = \(services)")
 
         offset += size
         size = MemoryLayout<Int64>.size
         let timestamp = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | Int64(byte)
         }
+        print("timestamp = \(timestamp)")
         
         offset += size
         var (newAddress, updatedOffset) = NetworkAddress.deserialise(uint8Array, arrayLength: arrayLength, offset: offset)
-//        var (newAddress, updatedOffset) = NetworkAddress.deserialise(data: data, offset: offset)
         offset = updatedOffset
         let receivingAddress = newAddress
+        print("receivingAddress = \(receivingAddress)")
         
         guard Int(arrayLength) - offset > 0 else {
             return VersionMessage(version: version, services: services, timestamp: timestamp, receivingAddress: receivingAddress, emittingAddress: nil, nonce: nil, userAgent: nil, startHeight: nil, relay: nil)
         }
         
         (newAddress, updatedOffset) = NetworkAddress.deserialise(uint8Array, arrayLength: arrayLength, offset: offset)
-//        (newAddress, updatedOffset) = NetworkAddress.deserialise(data: data, offset: offset)
         offset = updatedOffset
         let emittingAddress = newAddress
+        print("emittingAddress = \(emittingAddress)")
         
         size = MemoryLayout<UInt64>.size
         let nonce = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | UInt64(byte)
         }
+        print("nonce = \(nonce)")
         
         offset += size
         size = MemoryLayout<UInt8>.size
@@ -135,12 +163,14 @@ public struct VersionMessage {
             return Data(bytesNoCopy: mbuf.advanced(by: offset), count: size, deallocator: .none)
         }
         let userAgent = String(bytes: userAgentData, encoding: .utf8)!.trimmingCharacters(in: .whitespaces)
+        print("userAgent = \(userAgent)")
         
         offset += size
         size = MemoryLayout<Int32>.size
         let startHeight = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | Int32(byte)
         }
+        print("startHeight = \(startHeight)")
     
         guard Int(arrayLength) - offset > 0 else {
             return VersionMessage(version: version, services: services, timestamp: timestamp, receivingAddress: receivingAddress, emittingAddress: emittingAddress, nonce: nonce, userAgent: userAgent, startHeight: startHeight, relay: nil)
@@ -152,72 +182,4 @@ public struct VersionMessage {
 
         return VersionMessage(version: version, services: services, timestamp: timestamp, receivingAddress: receivingAddress, emittingAddress: emittingAddress, nonce: nonce, userAgent: userAgent, startHeight: startHeight, relay: relay)
     }
-    /*
-    public static func deserialise(_ data: Data) -> VersionMessage? {
-        var offset = 0
-        var size = MemoryLayout<Int32>.size
-        
-        let version = data[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
-            return soFar << 8 | Int32(byte)
-        }
-
-        offset += size
-        size = MemoryLayout<UInt64>.size
-        let services = data[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
-            return soFar << 8 | UInt64(byte)
-        }
-
-        offset += size
-        size = MemoryLayout<Int64>.size
-        let timestamp = data[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
-            return soFar << 8 | Int64(byte)
-        }
-        
-        offset += size
-        var (newAddress, updatedOffset) = NetworkAddress.deserialise(data: data, offset: offset)
-        offset = updatedOffset
-        let receivingAddress = newAddress
-        
-        guard data.count - offset > 0 else {
-            return VersionMessage(version: version, services: services, timestamp: timestamp, receivingAddress: receivingAddress, emittingAddress: nil, nonce: nil, userAgent: nil, startHeight: nil, relay: nil)
-        }
-        
-        (newAddress, updatedOffset) = NetworkAddress.deserialise(data: data, offset: offset)
-        offset = updatedOffset
-        let emittingAddress = newAddress
-        
-        size = MemoryLayout<UInt64>.size
-        let nonce = data[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
-            return soFar << 8 | UInt64(byte)
-        }
-        
-        offset += size
-        size = MemoryLayout<UInt8>.size
-        let userAgentSize = data[offset..<(offset + size)].withUnsafeBytes { $0.load(as: UInt8.self) }
-
-        offset += size
-        size = MemoryLayout<UInt8>.size * Int(userAgentSize)
-        
-        let userAgentData: Data = data.withUnsafeBytes { buf in
-            let mbuf = UnsafeMutablePointer(mutating: buf.bindMemory(to: UInt8.self).baseAddress!)
-            return Data(bytesNoCopy: mbuf.advanced(by: offset), count: size, deallocator: .none)
-        }
-        let userAgent = String(bytes: userAgentData, encoding: .utf8)!.trimmingCharacters(in: .whitespaces)
-        
-        offset += size
-        size = MemoryLayout<Int32>.size
-        let startHeight = data[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
-            return soFar << 8 | Int32(byte)
-        }
-    
-        guard data.count - offset > 0 else {
-            return VersionMessage(version: version, services: services, timestamp: timestamp, receivingAddress: receivingAddress, emittingAddress: emittingAddress, nonce: nonce, userAgent: userAgent, startHeight: startHeight, relay: nil)
-        }
-
-        offset += size
-        size = MemoryLayout<Bool>.size
-        let relay = Array(data[offset..<(offset + size)]).first! != 0x00
-
-        return VersionMessage(version: version, services: services, timestamp: timestamp, receivingAddress: receivingAddress, emittingAddress: emittingAddress, nonce: nonce, userAgent: userAgent, startHeight: startHeight, relay: relay)
-    }*/
 }

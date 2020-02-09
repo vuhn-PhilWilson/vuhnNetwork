@@ -30,7 +30,7 @@ class ConnectionsManager {
     static let shutdownCommand: String = "SHUTDOWN"
     static let bufferSize = 4096
     
-    var port: Int = 8333
+    var listenPort: Int = 8333
     var listenSocket: Socket? = nil
     var continueRunningValue = true
     var connectedSockets = [Int32: Socket]()
@@ -54,10 +54,12 @@ class ConnectionsManager {
 
     public init(addresses: [String], listenPort: Int = 8333, updateHandler: (([String: NetworkUpdate],Error?) -> Void)?) {
         self.updateHandler = updateHandler
-        self.port = listenPort
+        self.listenPort = listenPort
         for address in addresses {
             if ConnectionsManager.isValidAddress(address: address) {
                 let node = Node(address: address)
+
+                print("ConnectionsManager init  address  \(address)      node address  \(node.address) : \(node.port)       listenPort \(listenPort)")
                 node.connectionType = .outBound
                 nodes.append(node)
                 var networkUpdate = NetworkUpdate(type: .addedNodeWithAddress, level: .information, error: .allFine)
@@ -95,8 +97,9 @@ class ConnectionsManager {
                     print("Unable to unwrap socket...")
                     return
                 }
-                
-                try socket.listen(on: self.port)
+
+                print("run() socket.listen self.listenPort  \(self.listenPort)")
+                try socket.listen(on: self.listenPort)
                 
                 repeat {
                     let newSocket = try socket.acceptClientConnection()
@@ -104,11 +107,15 @@ class ConnectionsManager {
                     // Set how long we'll wait with no received
                     // data before we Ping the remote node
                     try newSocket.setReadTimeout(value: UInt(Constants.pingDuration))
+
+                    print("run() newSocket.remoteHostname  \(newSocket.remoteHostname)    newSocket.remotePort  \(newSocket.remotePort)")
                     
                     let node = Node(address: newSocket.remoteHostname, port: UInt16(newSocket.remotePort))
                     node.connectionType = .inBound
                     node.socket = newSocket
                     self.nodes.append(node)
+                    print("run() Other node connecting to us...")
+                    print("calling addNewConnection from run()")
                     self.addNewConnection(node: node)
                     
                 } while self.continueRunning
@@ -116,13 +123,13 @@ class ConnectionsManager {
             }
             catch let error {
                 guard let socketError = error as? Socket.Error else {
-                    print("Unexpected error...")
+                    print("run Unexpected error...")
                     return
                 }
                 
                 if self.continueRunning {
                     
-                    print("Error reported:\n \(socketError.description)")
+                    print("run Error reported:\n \(socketError.description)")
                     
                 }
             }
@@ -139,32 +146,40 @@ class ConnectionsManager {
     
     func connectToNode(node: Node) {
         do {
-            let newNodeSocket = try Socket.create(family: .inet)
+            var family = Socket.ProtocolFamily.inet
+            if node.address.contains(":") { family = Socket.ProtocolFamily.inet6 }
+            print("Socket.ProtocolFamily = \(family)")
+            let newNodeSocket = try Socket.create(family: family)
             // What buffer size shall we use ?
 //            newNodeSocket.readBufferSize = 32768
-            try newNodeSocket.connect(to: node.address, port: Int32(node.port), timeout: 10)
-
+            try newNodeSocket.connect(to: node.address, port: Int32(node.port), timeout: 10000)
+//            try newNodeSocket.connect(to: node.address, port: Int32(node.port), timeout: 0)
+            
             var networkUpdate = NetworkUpdate(type: .connected, level: .information, error: .allFine)
             networkUpdate.node = node
             updateHandler?(["\(node.address):\(node.port)":networkUpdate], nil)
 
             // Set how long we'll wait with no received
             // data before we Ping the remote node
-            try newNodeSocket.setReadTimeout(value: UInt(Constants.pingDuration))
+//            try newNodeSocket.setReadTimeout(value: UInt(Constants.pingDuration))
+            try newNodeSocket.setBlocking(mode: true)
             
-            let node = Node(address: newNodeSocket.remoteHostname, port: UInt16(newNodeSocket.remotePort))
+//            let node = Node(address: newNodeSocket.remoteHostname, port: UInt16(newNodeSocket.remotePort))
+            node.address = newNodeSocket.remoteHostname
+            node.port = UInt16(newNodeSocket.remotePort)
             node.connectionType = .outBound
             node.socket = newNodeSocket
             nodes.append(node)
+            print("calling addNewConnection from connectToNode()")
             addNewConnection(node: node)
         }
         catch let error {
             guard let socketError = error as? Socket.Error else {
-                print("Unexpected error...")
+                print("connectToNode Unexpected error...")
                 return
             }
             // is error reported on connection close ?
-            print("Error reported:\n \(socketError.description)")
+            print("connectToNode Error reported:\n \(socketError.description)")
         }
     }
     
@@ -173,6 +188,7 @@ class ConnectionsManager {
     private func sendMessage(_ socket: Socket?, _ message: Message) {
         guard let socket = socket else { return }
         let data = message.serialize()
+        let dataArray = [UInt8](data)
         do {
             try socket.write(from: data)
         } catch let error {
@@ -191,33 +207,29 @@ class ConnectionsManager {
         node.sentVersion = true
         var networkUpdate = NetworkUpdate(type: .sentVersion, level: .success, error: .allFine)
         networkUpdate.node = node
-        
         self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
         let version = VersionMessage(version: protocolVersion,
-                                     services: 0x125, // SFNodeNetwork|SFNodeBloom|SFNodeBitcoinCash|SFNodeCF == 37 1 0 0 0 0 0 0
+                                     services: 0x425, // (1061)
+            //services: 0x125, // (293) SFNodeNetwork|SFNodeBloom|SFNodeBitcoinCash|SFNodeCF == 37 1 0 0 0 0 0 0
                                      timestamp: Int64(Date().timeIntervalSince1970),
                                      receivingAddress: NetworkAddress(services: 0x00,
-                                                              address: "::ffff:127.0.0.1",
+                                                              address: "::ffff:\(node.address)",
                                                               port: UInt16(node.port)),
                                      emittingAddress: nil,
-                                     nonce: 0,
+                                     nonce: 16009251466998072645,
                                      userAgent: yourUserAgent,
-                                     startHeight: -1,
-                                     relay: false)
-        let message = Message(command: .Version, payload: version.serialize())
+                                     startHeight: 621193,//0,//-1,
+                                     relay: true)
+        
+        let payload = version.serialize()
+        
+        let message = Message(command: .Version, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         sendMessage(node.socket, message)
-//        emittingAddress: NetworkAddress(services: 0x00,
-//                                 address: "::ffff:127.0.0.1",
-//                                 port: UInt16(port)),
-//        receivingAddress: NetworkAddress(services: 0x00,
-//                                 address: "::ffff:127.0.0.1",
-//                                 port: UInt16(port)),
     }
     
     private func receiveVersionMessage(_ node: Node, dataByteArray: [UInt8], arrayLength: UInt32) {
         guard let versonMessage = VersionMessage.deserialise(dataByteArray, arrayLength: arrayLength) else { return }
-//        guard let versonMessage = VersionMessage.deserialise(data) else { return }
         node.version = versonMessage.version
         node.theirUserAgent = versonMessage.userAgent
         node.emittingAddress = versonMessage.receivingAddress
@@ -231,76 +243,80 @@ class ConnectionsManager {
         networkUpdate.node = node
         self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
-        if node.sentVerAck == false {
-            sendVerAckMessage(node)
+        if node.sentVerack == false {
+            sendVerackMessage(node)
         }
     }
 
-    private func receiveVerAckMessage(_ node: Node) {
-        node.receivedVerAck = true
-        node.receivedNetworkUpdateType = .receivedVerAck
-        var networkUpdate = NetworkUpdate(type: .receivedVerAck, level: .success, error: .allFine)
+    private func receiveVerackMessage(_ node: Node) {
+        node.receivedVerack = true
+        node.receivedNetworkUpdateType = .receivedVerack
+        var networkUpdate = NetworkUpdate(type: .receivedVerack, level: .success, error: .allFine)
         networkUpdate.node = node
         self.updateHandler?(["\(node.name)":networkUpdate], nil)
 
-        node.receivedVerAck = true
+        node.receivedVerack = true
     }
 
-    private func sendVerAckMessage(_ node: Node) {
-        node.sentNetworkUpdateType = .sentVerAck
-        node.sentVerAck = true
-        var networkUpdate = NetworkUpdate(type: .sentVerAck, level: .success, error: .allFine)
+    private func sendVerackMessage(_ node: Node) {
+        node.sentNetworkUpdateType = .sentVerack
+        node.sentVerack = true
+        var networkUpdate = NetworkUpdate(type: .sentVerack, level: .success, error: .allFine)
         networkUpdate.node = node
         self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
-        let verAckMessage = VerAckMessage()
-        let message = Message(command: .VerAck, payload: verAckMessage.serialize())
+        let verackMessage = VerackMessage()
+        let payload = verackMessage.serialize()
+        let message = Message(command: .Verack, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         sendMessage(node.socket, message)
     }
 
     private func sendPingMessage(_ node: Node) {
-//        print("receivePingMessage")
         node.sentNetworkUpdateType = .sentPing
         node.sentPing = true
         node.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
+        node.myPingNonce = generateNonce()
         
         var networkUpdate = NetworkUpdate(type: .sentPing, level: .success, error: .allFine)
         networkUpdate.node = node
         self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
+        networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
+        networkUpdate.message1 = "<\(NetworkUpdateType.sentPing)>"
+        networkUpdate.message2 = "\(node.myPingNonce)"
+        networkUpdate.node = node
+        // self.updateHandler?(["information":networkUpdate], nil)
+        self.updateHandler?(["\(node.name)":networkUpdate], nil)
+        
         let pingMessage = PingMessage(nonce: node.myPingNonce)
-        let message = Message(command: .Ping, payload: pingMessage.serialize())
+        let payload = pingMessage.serialize()
+        let message = Message(command: .Ping, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         sendMessage(node.socket, message)
     }
     
-    private func receivePongMessage(_ node: Node, dataByteArray: [UInt8]) -> Bool {
-//        print("receivePingMessage")
+    private func receivePongMessage(_ node: Node, dataByteArray: [UInt8]) -> (expectedNonce: UInt64, receivedNonce: UInt64) {
         var networkUpdate = NetworkUpdate(type: .receivedPong, level: .success, error: .allFine)
         networkUpdate.node = node
         node.receivedNetworkUpdateType = .receivedPong
         node.receivedPong = true
         self.updateHandler?(["\(node.name)":networkUpdate], nil)
 
-// Compare Nonce with the one we sent
-// Only if this remote node uses Nonces with Ping/Pong
+        // Compare Nonce with the one we sent
+        // Only if this remote node uses Nonces with Ping/Pong
         let pongMessage = PongMessage.deserialise(dataByteArray)
-        return node.myPingNonce == pongMessage.nonce
+        if let mine = node.myPingNonce,
+            let theirs = pongMessage.nonce {//,
+                networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
+                networkUpdate.message1 = "<\(NetworkUpdateType.receivedPong)>"
+                networkUpdate.message2 = "\(node.myPingNonce!)   littleEndian = \(node.myPingNonce!.littleEndian.toUInt8Array())   bigEndian = \(node.myPingNonce!.bigEndian.toUInt8Array())\n\(pongMessage.nonce!)   littleEndian = \(pongMessage.nonce!.littleEndian.toUInt8Array())   bigEndian = \(pongMessage.nonce!.bigEndian.toUInt8Array())"
+                networkUpdate.node = node
+                // self.updateHandler?(["information":networkUpdate], nil)
+                self.updateHandler?(["\(node.name)":networkUpdate], nil)
+            return (expectedNonce: mine, receivedNonce: theirs)
+        }
+        return (0, 1)
     }
-/*
-    private func receivePongMessage(_ node: Node, data: Data) -> Bool {
-//        print("receivePingMessage")
-        var networkUpdate = NetworkUpdate(type: .receivedPong, level: .success, error: .allFine)
-        networkUpdate.node = node
-        node.receivedNetworkUpdateType = .receivedPong
-        node.receivedPong = true
-        self.updateHandler?(["\(node.address)":networkUpdate], nil)
 
-// Compare Nonce with the one we sent
-// Only if this remote node uses Nonces with Ping/Pong
-        let pongMessage = PongMessage.deserialise(data)
-        return node.myPingNonce == pongMessage.nonce
-    }
-    */
     private func receivePingMessage(_ node: Node, dataByteArray: [UInt8]) {
         var networkUpdate = NetworkUpdate(type: .receivedPing, level: .success, error: .allFine)
         networkUpdate.node = node
@@ -310,39 +326,141 @@ class ConnectionsManager {
         
         let pingMessage = PingMessage.deserialise(dataByteArray)
         node.theirNodePingNonce = pingMessage.nonce
-        sendPongMessage(node)
-    }
-/*
-    private func receivePingMessage(_ node: Node, data: Data) {
-//        print("receivePingMessage")
-        var networkUpdate = NetworkUpdate(type: .receivedPing, level: .success, error: .allFine)
+
+        networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
+        networkUpdate.message1 = "<\(NetworkUpdateType.receivedPing)>"
+        networkUpdate.message2 = "\(node.theirNodePingNonce)"
         networkUpdate.node = node
-        node.receivedNetworkUpdateType = .receivedPing
-        node.receivedPing = true
-        self.updateHandler?(["\(node.address)":networkUpdate], nil)
+        // self.updateHandler?(["information":networkUpdate], nil)
+        self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
-        let pingMessage = PingMessage.deserialise(data)
-        node.theirNodePingNonce = pingMessage.nonce
         sendPongMessage(node)
     }
- */
 
     private func sendPongMessage(_ node: Node) {
-//        print("sendPongMessage")
         node.sentPong = true
         node.sentNetworkUpdateType = .sentPong
         var networkUpdate = NetworkUpdate(type: .sentPong, level: .success, error: .allFine)
         networkUpdate.node = node
         self.updateHandler?(["\(node.name)":networkUpdate], nil)
+
+        networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
+        networkUpdate.message1 = "<\(NetworkUpdateType.sentPong)>"
+        networkUpdate.message2 = "\(node.theirNodePingNonce)"
+        networkUpdate.node = node
+        // self.updateHandler?(["information":networkUpdate], nil)
+        self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
         let pongMessage = PongMessage(nonce: node.theirNodePingNonce)
-        let message = Message(command: .Pong, payload: pongMessage.serialize())
+        let payload = pongMessage.serialize()
+        let message = Message(command: .Pong, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         sendMessage(node.socket, message)
     }
     
     // MARK: -
+
+    // Attempt to consume network packet data
+    private func consumeNetworkPackets(_ node: Node) {
+        // Extract data
+        if node.packageData.count < 24 { return }
+    
+        while consumeMessage(node) { }
+    }
+
+    /// Attempt to consume message data.
+    /// Returns whether message was consumed
+    private func consumeMessage(_ node: Node) -> Bool {
+        if let message = Message.deserialise(Array([UInt8](node.packageData)), arrayLength: UInt32(node.packageData.count)) {
+            
+            if message.payload.count < message.length {
+                // We received the Message data but not the payload
+                return false
+            }
+            let payload = message.payload
+            node.packageData.removeFirst(Int(message.length + 24))
+            
+            // Confirm magic number is correct
+            if message.magic != 0xe3e1f3e8 {
+                print("magic != 0xe3e1f3e8\nmagic == \(message.magic)\nfor node with address \(node.address):\(node.port)")
+                return false
+            }
+
+            // Only verify checksum if this packet sent payload
+            // with message header
+            if message.payload.count >= message.length {
+                // Confirm checksum for message is correct
+                let checksumFromPayload =  Array(payload.doubleSHA256ToData[0..<4])
+                var checksumConfirmed = true
+                for (index, element) in checksumFromPayload.enumerated() {
+                    if message.checksum[index] != element { checksumConfirmed = false; break }
+                }
+                if checksumConfirmed != true { return false }
+            } else {
+                // Still more data to retrive for this message
+                return false
+            }
+
+            let payloadByteArray = Array([UInt8](payload))
+            let payloadArrayLength = payload.count
+
+            var networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
+            networkUpdate.message1 = "Incoming <\(message.command.onWireName)>"
+            networkUpdate.message2 = "\(payloadByteArray)"
+            networkUpdate.node = node
+            self.updateHandler?(["\(node.name)":networkUpdate], nil)
+
+            // MARK: - Message Check
+            switch message.command {
+            case .Unknown:
+                // Need to set this node as bad
+                break
+            case .Version:
+                self.receiveVersionMessage(node, dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
+            case .Verack:
+                self.receiveVerackMessage(node)
+            case .Ping:
+                self.receivePingMessage(node, dataByteArray: payloadByteArray)
+            case .Pong:
+                let (expectedNonce, receivedNonce) = self.receivePongMessage(node, dataByteArray: payloadByteArray)
+                if expectedNonce != receivedNonce {
+                    // Nonces do not match
+                    // Need to set this node as bad
+                    networkUpdate = NetworkUpdate(type: .message, level: .information, error: .incorrectPingNonce)
+                    networkUpdate.message1 = "<\(message.command.onWireName)>"
+                    networkUpdate.message2 = "Nonce != \(node.myPingNonce!)"
+                    networkUpdate.node = node
+                    self.updateHandler?(["\(node.name)":networkUpdate], nil)
+                } else {
+                    networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
+                    networkUpdate.message1 = "<\(message.command.onWireName)>"
+                    networkUpdate.message2 = "Nonce == \(node.myPingNonce!)"
+                    networkUpdate.node = node
+                    self.updateHandler?(["\(node.name)":networkUpdate], nil)
+                }
+                                        
+            case .Addr:
+                break
+            case .Inv:
+                break
+            case .Getheaders:
+                break
+            case .Sendheaders:
+                break
+            case .Sendcmpct:
+                break
+            }
+            networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
+            networkUpdate.message1 = "<\(message.command.onWireName)>"
+            networkUpdate.message2 = ""
+            networkUpdate.node = node
+            self.updateHandler?(["\(node.name)":networkUpdate], nil)
+            return true
+        }
+        return false
+    }
     
     func addNewConnection(node: Node) {
+        print("addNewConnection \(node.address):\(node.port)")
         guard let socket = node.socket else {
             print("addNewConnection: No socket for this node \(node.address):\(node.port)")
             return
@@ -360,14 +478,19 @@ class ConnectionsManager {
         queue.async { [unowned self, socket] in
             
             var shouldKeepRunning = true
-            var readData = Data(capacity: EchoServer.bufferSize)
+//            var readData = Data(capacity: ConnectionsManager.bufferSize)
             
             do {
                 var networkUpdate = NetworkUpdate(type: .connected, level: .information, error: .allFine)
                 networkUpdate.node = node
                 self.updateHandler?(["\(node.name)":networkUpdate], nil)
+
+                var randomDuration = Double.random(in: 20 ... 40)
+                print("randomDuration = \(randomDuration)")
                 
                 repeat {
+
+                    // MARK: - <<<< Message pump
                     
                     // If we've never sent Version message, send it now
                     if node.sentVersion == false {
@@ -378,162 +501,38 @@ class ConnectionsManager {
                     // Send a Ping message periodically
                     // to check whether the remote node is still around
                     let elapsedTime = (NSDate().timeIntervalSince1970 - node.lastPingReceivedTimeInterval)
-                    if node.receivedVerAck == true
-                        && elapsedTime > (Constants.pingDuration / 1000) {
+                    if node.receivedVerack == true
+                        && elapsedTime > (randomDuration) {
+                        randomDuration = Double.random(in: 20 ... 40)
+                        print("randomDuration = \(randomDuration)")
                         self.sendPingMessage(node)
                     }
                     
+                    // MARK: - Read Data
+                    
                     // Read incoming data
-                    let bytesRead = try socket.read(into: &readData)
+                    // We're looking for Messages and Payloads
+                    // Once we have both, then the data is consumed
                     
-                    if bytesRead > 0 {
-//                        guard let response = String(data: readData, encoding: .utf8) else {
-//                            print("Error decoding response...")
-//                            readData.count = 0
-//                            break
-//                        }
+                    // Some messages do not require a payload i.e. verack
+//                    var bytesRead = try socket.read(into: &readData)
 
-//                        if response.hasPrefix(EchoServer.shutdownCommand) {
-//                            print("Shutdown requested by connection at \(socket.remoteHostname):\(socket.remotePort)")
-//                            // Shut things down...
-//                            self.shutdownServer()
-//                            DispatchQueue.main.sync {
-//                                exit(0)
-//                            }
-//                        }
-                        
-                        // Extract Message data
-                        let byteArray = Array([UInt8](readData))
-                        if let message = Message.deserialise(byteArray, arrayLength: UInt32(bytesRead)) {
-//                        if let message = Message.deserialise(byteArray) {
-                            let payload = message.payload
-                            
-                            // Confirm magic number is correct
-                            if message.magic != 0xe3e1f3e8 {
-                                print("magic != 0xe3e1f3e8\nmagic == \(message.magic)\nfor node with address \(node.address):\(node.port)")
-                                continue
-                            }
-
-                            // Confirm checksum for message is correct
-                            let checksumFromPayload =  Array(payload.doubleSHA256ToData[0..<4])
-                            var checksumConfirmed = true
-                            for (index, element) in checksumFromPayload.enumerated() {
-                                if message.checksum[index] != element { checksumConfirmed = false; break }
-                            }
-                            if checksumConfirmed != true {
-                                print("message checksum incorrect\nShould be \(checksumFromPayload)\nMessage checksum is message.checksum\nfor node with address \(node.address):\(node.port)")
-                                continue
-                            }
-
-                            let payloadByteArray = Array([UInt8](payload))
-                            let payloadArrayLength = payload.count
-
-//                            print("message.command \(message.command)")
-                            switch message.command {
-                            case .Unknown:
-                                // Need to set this node as bad
-                                break
-                            case .Version:
-                                self.receiveVersionMessage(node, dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
-//                                self.receiveVersionMessage(node, data: payload)
-                            case .VerAck:
-                                self.receiveVerAckMessage(node)
-                            case .Ping:
-                                self.receivePingMessage(node, dataByteArray: payloadByteArray)
-                            case .Pong:
-                                if self.receivePongMessage(node, dataByteArray: payloadByteArray) != true {
-                                    // Nonces do not match
-                                    // Need to set this node as bad
-                                }
-                            }
-                        } else {
-                            
-                            print("Could not deserialise Message \(byteArray)")
-                        }
-                    
-//                        let magic = readData.read(UInt32.self)
-//                        let command = byteStream.read(Data.self, count: 12).to(type: String.self)
-//                        let length = byteStream.read(UInt32.self)
-//                        let checksum = byteStream.read(Data.self, count: 4)
-                        
-//                        let magic = byteStream.read(UInt32.self)
-//                        let command = byteStream.read(Data.self, count: 12).to(type: String.self)
-//                        let length = byteStream.read(UInt32.self)
-//                        let checksum = byteStream.read(Data.self, count: 4)
-                        
-                        
-                        
-                        /*
-                        if response.hasPrefix("Version") {
-                            networkUpdate = NetworkUpdate(type: .receivedVersion, level: .success, error: .allFine)
-                            networkUpdate.node = node
-                            self.updateHandler?(["\(node.address)":networkUpdate], nil)
-                            node.receivedNetworkUpdateType = .receivedVersion
-                            if node.receivedVersion == true {
-                                // Already received Version message from this node
-                                // Should now begin to record bad remote node behaviour
-                            }
-                            node.receivedVersion = true
-    
-                            node.sentNetworkUpdateType = .sentVerAck
-                            node.sentVerAck = true
-                            networkUpdate = NetworkUpdate(type: .sentVerAck, level: .success, error: .allFine)
-                            networkUpdate.node = node
-                            self.updateHandler?(["\(node.address)":networkUpdate], nil)
-                            try socket.write(from: "VerAck")
-                        }
-                        
-                        if response.hasPrefix("VerAck") {
-                            networkUpdate = NetworkUpdate(type: .receivedVerAck, level: .success, error: .allFine)
-                            networkUpdate.node = node
-                            self.updateHandler?(["\(node.address)":networkUpdate], nil)
-                            node.receivedNetworkUpdateType = .receivedVerAck
-                            if node.receivedVersion == true {
-                                // Already received Version message from this node
-                                // Should now begin to record bad remote node behaviour
-                            }
-                            node.receivedVerAck = true
-                        }
-                        
-                        if response.hasPrefix("Ping") {
-                            networkUpdate = NetworkUpdate(type: .receivedPing, level: .success, error: .allFine)
-                            networkUpdate.node = node
-                            self.updateHandler?(["\(node.address)":networkUpdate], nil)
-                            node.receivedNetworkUpdateType = .receivedPing
-                            node.receivedPing = true
-                            
-                            node.sentNetworkUpdateType = .sentPong
-                            node.sentPong = true
-                            networkUpdate = NetworkUpdate(type: .sentPong, level: .success, error: .allFine)
-                            networkUpdate.node = node
-                            self.updateHandler?(["\(node.address)":networkUpdate], nil)
-                            try socket.write(from: "Pong")
-                        }
-                        
-                        if response.hasPrefix("Pong") {
-                            networkUpdate = NetworkUpdate(type: .receivedPong, level: .success, error: .allFine)
-                            networkUpdate.node = node
-                            self.updateHandler?(["\(node.address)":networkUpdate], nil)
-                            node.receivedNetworkUpdateType = .receivedPong
-                            node.receivedPong = true
-                            
-                            // Compare Nonce with the one we sent
-                            // Only if this remote node uses Nonces with Ping/Pong
-                        }
-                        if response.hasPrefix(EchoServer.quitCommand) || response.hasSuffix(EchoServer.quitCommand) {
+                    // https://github.com/IBM-Swift/BlueSocket/issues/117
+                    var readData = Data(capacity: ConnectionsManager.bufferSize)
+                    while try socket.isReadableOrWritable().readable {
+                        let bytesRead = try socket.read(into: &readData)
+                        if bytesRead == 0
+                            && socket.remoteConnectionClosed == true {
                             shouldKeepRunning = false
+                            break
                         }
-                        */
+                        if bytesRead > 0 {
+                            node.packageData.append(readData)
+                        }
+                        readData.count = 0
                     }
                     
-                    if bytesRead == 0
-                        && socket.remoteConnectionClosed == true {
-                        shouldKeepRunning = false
-                        break
-                    }
-                    
-                    readData.count = 0
-                    
+                    self.consumeNetworkPackets(node)
                 } while shouldKeepRunning
                 
                 networkUpdate = NetworkUpdate(type: .socketClosing, level: .information, error: .allFine)
@@ -550,11 +549,11 @@ class ConnectionsManager {
             }
             catch let error {
                 guard let socketError = error as? Socket.Error else {
-                    print("Unexpected error by connection at \(socket.remoteHostname):\(socket.remotePort)...")
+                    print("addNewConnection Unexpected error by connection at \(socket.remoteHostname):\(socket.remotePort)...")
                     return
                 }
                 if self.continueRunning {
-                    print("Error reported by connection at \(socket.remoteHostname):\(socket.remotePort):\n \(socketError.description)")
+                    print("addNewConnection Error reported by connection at \(socket.remoteHostname):\(socket.remotePort):\n \(socketError.description)")
                 }
             }
         }

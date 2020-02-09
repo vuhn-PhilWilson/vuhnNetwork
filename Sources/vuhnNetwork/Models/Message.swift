@@ -11,23 +11,35 @@ import Cryptor
 public enum CommandType: String, Codable {
     case Unknown
     case Version
-    case VerAck
+    case Verack
     case Ping
     case Pong
+    case Addr
+    case Inv
+    case Getheaders
+    case Sendheaders
+    case Sendcmpct
+    
+    var onWireName: String {
+        get {
+            return self.rawValue.lowercased()
+        }
+    }
+    
+    static func offWireName(text: String) -> String {
+        return text.lowercased().capitalized
+    }
     
     // Command string is a maximum 12 characters long
     // Needs to pad with 0x00, not " "
     var toData: Data {
-        return self.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0).data(using: .utf8)!
-//        return Data(self.rawValue.padding(toLength: 12, withPad: "", startingAt: 0))
+        let nameWithPaddingSpaces = self.onWireName.padding(toLength: 12, withPad: " ", startingAt: 0).trimmingCharacters(in: .whitespaces)
+        var nameData = nameWithPaddingSpaces.data(using: .utf8)!
+        nameData.append(contentsOf: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        nameData.removeLast(nameData.count - 12)
+        return nameData
     }
 }
-
-
-// Command string is a maximum 12 characters long
-//var toCommandString: String? {
-//    return String(bytes: self, encoding: .utf8)?.padding(toLength: 12, withPad: "", startingAt: 0)
-//}
 
 // Known magic values:
 //
@@ -49,15 +61,11 @@ public struct Message: Codable {
     
     /// Length of payload in number of bytes
     /// Computed from payload data
-    public var length: UInt32 {
-        return UInt32(payload.count)
-    }
+    public var length: UInt32
     
     /// First 4 bytes of sha256(sha256(payload))
     /// Computed from payload data
-    public var checksum: Data {
-        return payload.doubleSHA256ToData[0..<4]
-    }
+    public var checksum: Data
     
     /// The actual data
     public var payload: Data
@@ -68,14 +76,12 @@ public struct Message: Codable {
         data += command.toData
         data += withUnsafeBytes(of: UInt32(payload.count).littleEndian) { Data($0) }
         data += checksum
-//        print("checksum = <\(Array([UInt8](checksum)))>")
-
-        
         data += payload
         return data
     }
     
     public static func deserialise(_ uint8Array: [UInt8], arrayLength: UInt32) -> Message? {
+        if uint8Array.count < 24 { return nil }
         var offset = 0
         var size = MemoryLayout<UInt32>.size
         
@@ -83,43 +89,50 @@ public struct Message: Codable {
             return soFar << 8 | UInt32(byte)
         }
         
-        guard magic == 0xe3e1f3e8 else {
-            print("magic != 0xe3e1f3e8\nmagic == \(magic)")
-            return nil
-        }
-//        print("magic == 0xe3e1f3e8")
+        guard magic == 0xe3e1f3e8 else { return nil }
         
         offset += size
         size = MemoryLayout<UInt8>.size * 12
-        let commandData = uint8Array[offset..<(offset + size)]
-        let command = String(bytes: commandData, encoding: .utf8)!.trimmingCharacters(in: .whitespaces)
-
+        var commandType: CommandType? = CommandType.Unknown
+        let commandArray = uint8Array[offset..<(offset + size)].filter { $0 != 0 }
+        if let commandString = String(bytes: commandArray, encoding: .utf8) {
+            commandType = CommandType(rawValue: CommandType.offWireName(text: commandString))
+            if commandType == nil {
+                commandType = .Unknown
+            }
+        }
+        
         offset += size
         size = MemoryLayout<UInt32>.size
-        let length = Array(uint8Array[offset..<(offset + size)]).first!
+        let length = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
+            return soFar << 8 | UInt32(byte)
+        }
         
         offset += size
         size = MemoryLayout<UInt8>.size * 4
-        var checksum = Array(uint8Array[offset..<(offset + size)])
-//        print("checksum = <\(checksum)>")
-//        checksum[2] = 0xee
-//        print("checksum changed = <\(checksum)>")
+        let checksum = Array(uint8Array[offset..<(offset + size)])
         
-        offset += size
-        size = Int(length)
-        let payloadArray = Array(uint8Array[offset..<(offset + size)])
-        let payload = Data(payloadArray)
+        if arrayLength <= 24 {
+            return Message(magic: magic, command: commandType ?? .Unknown, length: UInt32(length), checksum: Data(checksum), payload: Data())
+        }
+
+        var payload = Data()
+        if (offset + size) < arrayLength {
+            offset += size
+            size = Int(length)
+            let payloadArray = Array(uint8Array[offset..<(offset + size)])
+            payload = Data(payloadArray)
+        }
         
         // Confirm checksum is correct
         let checksumFromPayload =  Array(payload.doubleSHA256ToData[0..<4])
-//        print("checksumFromPayload = <\(checksumFromPayload)>")
         var checksumConfirmed = true
         for (index, element) in checksumFromPayload.enumerated() {
             if checksum[index] != element { checksumConfirmed = false; break }
         }
-//        print("checksumConfirmed = <\(checksumConfirmed)>")
-        
-        let newMessage = Message(magic: magic, command: CommandType(rawValue: command) ?? .Unknown, payload: payload)
+        if checksumConfirmed == false { return nil }
+
+        let newMessage = Message(magic: magic, command: commandType ?? .Unknown, length: UInt32(length), checksum: Data(checksum), payload: payload)
         return newMessage
     }
 }
@@ -155,3 +168,4 @@ extension String : DataConvertible {
         return Data(self.utf8)
     }
 }
+

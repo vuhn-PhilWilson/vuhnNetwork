@@ -9,23 +9,24 @@ import Foundation
 
 public enum NetworkUpdateType {
     case unknown
+    case message
     
     case addedNodeWithAddress
     case connecting
     case connected
     
     case sentVersion
-    case sentVerAck
+    case sentVerack
     case sentPing
     case sentPong
     
     case receivedVersion
-    case receivedVerAck
+    case receivedVerack
     case receivedPing
     case receivedPong
     
     case awaitingVersion
-    case awaitingVerAck
+    case awaitingVerack
     case awaitingPing
     case awaitingPong
     
@@ -40,23 +41,24 @@ public enum NetworkUpdateType {
     public func displayText() -> String {
         switch self {
         case .unknown: return "unknown"
-        
+        case .message: return "message"
+            
         case .addedNodeWithAddress: return "added node with address"
         case .connecting: return "connecting"
         case .connected: return "connected"
             
         case .sentVersion: return "sent Version"
-        case .sentVerAck: return "sent VerAck"
+        case .sentVerack: return "sent Verack"
         case .sentPing: return "sent Ping"
         case .sentPong: return "sent Pong"
             
         case .receivedVersion: return "received Version"
-        case .receivedVerAck: return "received VerAck"
+        case .receivedVerack: return "received Verack"
         case .receivedPing: return "received Ping"
         case .receivedPong: return "received Pong"
             
         case .awaitingVersion: return "awaiting Version"
-        case .awaitingVerAck: return "awaiting VerAck"
+        case .awaitingVerack: return "awaiting Verack"
         case .awaitingPing: return "awaiting Ping"
         case .awaitingPong: return "awaiting Pong"
             
@@ -80,6 +82,7 @@ public enum NetworkUpdateLevel {
 
 public enum NetworkUpdateError {
     case allFine
+    case incorrectPingNonce
     case invalidAddress
     case invalidPort
     case invalidNetwork
@@ -89,6 +92,8 @@ public enum NetworkUpdateError {
 }
 
 public struct NetworkUpdate {
+    public var message1: String? = nil
+    public var message2: String? = nil
     public var node: Node? = nil
     public let type: NetworkUpdateType
     let level: NetworkUpdateLevel
