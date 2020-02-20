@@ -178,6 +178,7 @@ public class NodeManager {
     // MARK: - Messages
 
     private func sendVersionMessage(_ node: Node) {
+        node.sentCommand = .version
         node.sentNetworkUpdateType = .sentVersion
         node.sentVersion = true
         
@@ -225,6 +226,7 @@ public class NodeManager {
     }
 
     private func sendVerackMessage(_ node: Node) {
+        node.sentCommand = .verack
         node.sentNetworkUpdateType = .sentVerack
         node.sentVerack = true
         
@@ -235,6 +237,7 @@ public class NodeManager {
     }
 
     private func sendPingMessage(_ node: Node) {
+        node.sentCommand = .ping
         node.sentNetworkUpdateType = .sentPing
         node.sentPing = true
         node.receivedPong = false
@@ -272,6 +275,7 @@ public class NodeManager {
     }
 
     private func sendPongMessage(_ node: Node) {
+        node.sentCommand = .pong
         node.sentPong = true
         node.sentNetworkUpdateType = .sentPong
 
@@ -362,10 +366,11 @@ public class NodeManager {
                         }
                         readData.count = 0
                     }
-                    
+                    // MARK: - Message Check
                     if let message = self.networkService.consumeNetworkPackets(node) {
                         let payloadByteArray = Array([UInt8](message.payload))
                         let payloadArrayLength = message.payload.count
+                        node.receivedCommand = message.command
                         switch message.command {
                         case .unknown:
                             // Need to set this node as bad
@@ -396,6 +401,7 @@ public class NodeManager {
                             break
                         }
                     }
+                    // MARK: - >>>> Message pump
                 } while shouldKeepRunning
 
                 print("closing socket \(socket.remoteHostname):\(socket.remotePort)...")

@@ -71,6 +71,10 @@ public class Node {
     public var sentNetworkUpdateType = NetworkUpdateType.unknown
     public var receivedNetworkUpdateType = NetworkUpdateType.unknown
     
+    
+    public var sentCommand = FourCC.Command.unknown
+    public var receivedCommand = FourCC.Command.unknown
+    
     public var name: String {
         get {
             return "\(address):\(port)"

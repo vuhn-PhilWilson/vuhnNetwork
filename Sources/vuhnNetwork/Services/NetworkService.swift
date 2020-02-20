@@ -13,7 +13,7 @@ class NetworkService {
     
     func sendMessage(_ socket: Socket?, _ message: Message) {
         guard let socket = socket else { return }
-        print("Sending \(message.command)")
+//        print("Sending \(message.command)")
         let data = message.serialize()
         //        let dataArray = [UInt8](data)
         do {
@@ -73,9 +73,7 @@ class NetworkService {
                 return nil
             }
             
-            // MARK: - Message Check
-            
-            print("Received \(message.command)")
+//            print("Received \(message.command)")
 
             return message
         }
