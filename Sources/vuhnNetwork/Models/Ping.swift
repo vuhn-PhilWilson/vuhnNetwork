@@ -1,10 +1,7 @@
+// Copyright (c) 2020 Satoshi Nakamoto
 //
-//  Ping.swift
-//  
-//
-//  Created by Phil Wilson on 31/1/20.
-//
-// https://en.bitcoin.it/wiki/Protocol_documentation#ping
+// Distributed under the MIT/X11 software license ( see the accompanying
+// file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
 

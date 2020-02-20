@@ -1,9 +1,7 @@
+// Copyright (c) 2020 Satoshi Nakamoto
 //
-//  NetworkUpdate.swift
-//  
-//
-//  Created by Phil Wilson on 26/1/20.
-//
+// Distributed under the MIT/X11 software license ( see the accompanying
+// file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
 

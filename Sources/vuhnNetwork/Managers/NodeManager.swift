@@ -1,10 +1,7 @@
+// Copyright (c) 2020 Satoshi Nakamoto
 //
-//  ConnectionsManager.swift
-//  
-//
-//  Created by Phil Wilson on 26/1/20.
-//
-// https://github.com/IBM-Swift/BlueSocket
+// Distributed under the MIT/X11 software license ( see the accompanying
+// file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 #if os(Linux)
     import Glibc
@@ -13,25 +10,24 @@
 #endif
 import Foundation
 import Socket
-import Dispatch
 import Cryptor
-//import CommonCrypto
-//import CryptoKit
 
-class ConnectionsManager {
+public class NodeManager {
     
     enum Constants {
         static let pingDuration: Double = 10000 // 10 seconds
     }
     
+    // MARK: - Public Properties
+    
     var nodes = [Node]()
     
-    static let quitCommand: String = "QUIT"
-    static let shutdownCommand: String = "SHUTDOWN"
+    // MARK: - Private Properties
+    
     static let bufferSize = 4096
     
-    var listenPort: Int = 8333
-    var listenSocket: Socket? = nil
+    var listeningPort: Int = -1
+    var listeningSocket: Socket? = nil
     var continueRunningValue = true
     var connectedSockets = [Int32: Socket]()
     let socketLockQueue = DispatchQueue(label: "hn.vu.outboundConnections.socketLockQueue")
@@ -47,43 +43,36 @@ class ConnectionsManager {
             }
         }
     }
-
-    var updateHandler: (([String: NetworkUpdate],Error?) -> Void)?
     
-    // MARK: -
-
-    public init(addresses: [String], listenPort: Int = 8333, updateHandler: (([String: NetworkUpdate],Error?) -> Void)?) {
-        self.updateHandler = updateHandler
-        self.listenPort = listenPort
-        for address in addresses {
-            if ConnectionsManager.isValidAddress(address: address) {
-                let node = Node(address: address)
-
-                print("ConnectionsManager init  address  \(address)      node address  \(node.address) : \(node.port)       listenPort \(listenPort)")
-                node.connectionType = .outBound
-                nodes.append(node)
-                var networkUpdate = NetworkUpdate(type: .addedNodeWithAddress, level: .information, error: .allFine)
-                networkUpdate.node = node
-                updateHandler?(["\(address)":networkUpdate], nil)
-            }
-        }
-    }
+    // MARK: - Public
+    
+    public init() { }
         
     deinit {
         for socket in connectedSockets.values {
             socket.close()
         }
-        self.listenSocket?.close()
+        self.listeningSocket?.close()
     }
         
-    func close() {
+    public func close() {
         shutdownServer()
     }
     
-    // MARK: -
+    public func configure(with addresses: [String], and listeningPort: Int = 8333) {
+
+        self.listeningPort = listeningPort
+        for address in addresses {
+            if NetworkAddress.isValidAddress(address: address) {
+                let node = Node(address: address)
+                node.connectionType = .outBound
+                nodes.append(node)
+            }
+        }
+    }
     
-    func run() {
-        
+    public func startListening() {
+        if listeningPort == -1 { return }
         let queue = DispatchQueue.global(qos: .userInteractive)
         
         queue.async { [unowned self] in
@@ -91,15 +80,15 @@ class ConnectionsManager {
             do {
                 // Create an IPV4 socket...
                 // VirtualBox running Ubuntu cannot see IPV6 local connections
-                try self.listenSocket = Socket.create(family: .inet)
+                try self.listeningSocket = Socket.create(family: .inet)
                 
-                guard let socket = self.listenSocket else {
+                guard let socket = self.listeningSocket else {
                     print("Unable to unwrap socket...")
                     return
                 }
 
-                print("run() socket.listen self.listenPort  \(self.listenPort)")
-                try socket.listen(on: self.listenPort)
+                print("startListening() socket.listen self.listenPort  \(self.listeningPort)")
+                try socket.listen(on: self.listeningPort)
                 
                 repeat {
                     let newSocket = try socket.acceptClientConnection()
@@ -134,17 +123,19 @@ class ConnectionsManager {
                 }
             }
         }
-        connectToAllNodes()
-        dispatchMain()
     }
-    
-    func connectToAllNodes() {
+        
+    public func connectToOutboundNodes() {
         for node in nodes {
-            connectToNode(node: node)
+            if node.connectionType == .outBound {
+                connectToNode(node: node)
+            }
         }
     }
     
-    func connectToNode(node: Node) {
+    // MARK: - Private
+    
+    private func connectToNode(node: Node) {
         do {
             var family = Socket.ProtocolFamily.inet
             if node.address.contains(":") { family = Socket.ProtocolFamily.inet6 }
@@ -155,9 +146,6 @@ class ConnectionsManager {
             try newNodeSocket.connect(to: node.address, port: Int32(node.port), timeout: 10000)
 //            try newNodeSocket.connect(to: node.address, port: Int32(node.port), timeout: 0)
             
-            var networkUpdate = NetworkUpdate(type: .connected, level: .information, error: .allFine)
-            networkUpdate.node = node
-            updateHandler?(["\(node.address):\(node.port)":networkUpdate], nil)
 
             // Set how long we'll wait with no received
             // data before we Ping the remote node
@@ -182,11 +170,13 @@ class ConnectionsManager {
             print("connectToNode Error reported:\n \(socketError.description)")
         }
     }
+
     
     // MARK: - Messages
     
     private func sendMessage(_ socket: Socket?, _ message: Message) {
         guard let socket = socket else { return }
+        print("Sending \(message.command)")
         let data = message.serialize()
 //        let dataArray = [UInt8](data)
         do {
@@ -205,9 +195,6 @@ class ConnectionsManager {
     private func sendVersionMessage(_ node: Node) {
         node.sentNetworkUpdateType = .sentVersion
         node.sentVersion = true
-        var networkUpdate = NetworkUpdate(type: .sentVersion, level: .success, error: .allFine)
-        networkUpdate.node = node
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
         let version = VersionMessage(version: protocolVersion,
                                      services: 0x425, // (1061)
@@ -239,9 +226,6 @@ class ConnectionsManager {
         
         node.receivedNetworkUpdateType = .receivedVersion
         node.receivedVersion = true
-        var networkUpdate = NetworkUpdate(type: .receivedVersion, level: .success, error: .allFine)
-        networkUpdate.node = node
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
         if node.sentVerack == false {
             sendVerackMessage(node)
@@ -251,9 +235,6 @@ class ConnectionsManager {
     private func receiveVerackMessage(_ node: Node) {
         node.receivedVerack = true
         node.receivedNetworkUpdateType = .receivedVerack
-        var networkUpdate = NetworkUpdate(type: .receivedVerack, level: .success, error: .allFine)
-        networkUpdate.node = node
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
 
         node.receivedVerack = true
     }
@@ -261,9 +242,6 @@ class ConnectionsManager {
     private func sendVerackMessage(_ node: Node) {
         node.sentNetworkUpdateType = .sentVerack
         node.sentVerack = true
-        var networkUpdate = NetworkUpdate(type: .sentVerack, level: .success, error: .allFine)
-        networkUpdate.node = node
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
         let verackMessage = VerackMessage()
         let payload = verackMessage.serialize()
@@ -277,17 +255,6 @@ class ConnectionsManager {
         node.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
         node.myPingNonce = generateNonce()
         
-        var networkUpdate = NetworkUpdate(type: .sentPing, level: .success, error: .allFine)
-        networkUpdate.node = node
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
-        
-        networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
-        networkUpdate.message1 = "<\(NetworkUpdateType.sentPing)>"
-        networkUpdate.message2 = "\(node.myPingNonce ?? UInt64(0x00))"
-        networkUpdate.node = node
-        // self.updateHandler?(["information":networkUpdate], nil)
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
-        
         let pingMessage = PingMessage(nonce: node.myPingNonce)
         let payload = pingMessage.serialize()
         let message = Message(command: .ping, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
@@ -295,44 +262,25 @@ class ConnectionsManager {
     }
     
     private func receivePongMessage(_ node: Node, dataByteArray: [UInt8]) -> (expectedNonce: UInt64, receivedNonce: UInt64) {
-        var networkUpdate = NetworkUpdate(type: .receivedPong, level: .success, error: .allFine)
-        networkUpdate.node = node
         node.receivedNetworkUpdateType = .receivedPong
         node.receivedPong = true
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
 
         // Compare Nonce with the one we sent
         // Only if this remote node uses Nonces with Ping/Pong
         let pongMessage = PongMessage.deserialise(dataByteArray)
         if let mine = node.myPingNonce,
-            let theirs = pongMessage.nonce {//,
-                networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
-                networkUpdate.message1 = "<\(NetworkUpdateType.receivedPong)>"
-                networkUpdate.message2 = "\(node.myPingNonce!)   littleEndian = \(node.myPingNonce!.littleEndian.toUInt8Array())   bigEndian = \(node.myPingNonce!.bigEndian.toUInt8Array())\n\(pongMessage.nonce!)   littleEndian = \(pongMessage.nonce!.littleEndian.toUInt8Array())   bigEndian = \(pongMessage.nonce!.bigEndian.toUInt8Array())"
-                networkUpdate.node = node
-                // self.updateHandler?(["information":networkUpdate], nil)
-                self.updateHandler?(["\(node.name)":networkUpdate], nil)
+            let theirs = pongMessage.nonce {
             return (expectedNonce: mine, receivedNonce: theirs)
         }
         return (0, 1)
     }
 
     private func receivePingMessage(_ node: Node, dataByteArray: [UInt8]) {
-        var networkUpdate = NetworkUpdate(type: .receivedPing, level: .success, error: .allFine)
-        networkUpdate.node = node
         node.receivedNetworkUpdateType = .receivedPing
         node.receivedPing = true
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
         let pingMessage = PingMessage.deserialise(dataByteArray)
         node.theirNodePingNonce = pingMessage.nonce
-
-        networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
-        networkUpdate.message1 = "<\(NetworkUpdateType.receivedPing)>"
-        networkUpdate.message2 = "\(node.theirNodePingNonce ?? UInt64(0x00))"
-        networkUpdate.node = node
-        // self.updateHandler?(["information":networkUpdate], nil)
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
         
         sendPongMessage(node)
     }
@@ -340,17 +288,7 @@ class ConnectionsManager {
     private func sendPongMessage(_ node: Node) {
         node.sentPong = true
         node.sentNetworkUpdateType = .sentPong
-        var networkUpdate = NetworkUpdate(type: .sentPong, level: .success, error: .allFine)
-        networkUpdate.node = node
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
 
-        networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
-        networkUpdate.message1 = "<\(NetworkUpdateType.sentPong)>"
-        networkUpdate.message2 = "\(node.theirNodePingNonce ?? UInt64(0x00))"
-        networkUpdate.node = node
-        // self.updateHandler?(["information":networkUpdate], nil)
-        self.updateHandler?(["\(node.name)":networkUpdate], nil)
-        
         let pongMessage = PongMessage(nonce: node.theirNodePingNonce)
         let payload = pongMessage.serialize()
         let message = Message(command: .pong, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
@@ -403,13 +341,10 @@ class ConnectionsManager {
             let payloadByteArray = Array([UInt8](payload))
             let payloadArrayLength = payload.count
 
-            var networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
-            networkUpdate.message1 = "Incoming <\(message.command)>"
-            networkUpdate.message2 = "\(payloadByteArray)"
-            networkUpdate.node = node
-            self.updateHandler?(["\(node.name)":networkUpdate], nil)
-
             // MARK: - Message Check
+
+            print("Received \(message.command)")
+            
             switch message.command {
             case .unknown:
                 // Need to set this node as bad
@@ -425,17 +360,7 @@ class ConnectionsManager {
                 if expectedNonce != receivedNonce {
                     // Nonces do not match
                     // Need to set this node as bad
-                    networkUpdate = NetworkUpdate(type: .message, level: .information, error: .incorrectPingNonce)
-                    networkUpdate.message1 = "<\(message.command)>"
-                    networkUpdate.message2 = "Nonce != \(node.myPingNonce!)"
-                    networkUpdate.node = node
-                    self.updateHandler?(["\(node.name)":networkUpdate], nil)
                 } else {
-                    networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
-                    networkUpdate.message1 = "<\(message.command)>"
-                    networkUpdate.message2 = "Nonce == \(node.myPingNonce!)"
-                    networkUpdate.node = node
-                    self.updateHandler?(["\(node.name)":networkUpdate], nil)
                 }
                                         
             case .addr:
@@ -449,11 +374,6 @@ class ConnectionsManager {
             case .sendcmpct:
                 break
             }
-            networkUpdate = NetworkUpdate(type: .message, level: .information, error: .allFine)
-            networkUpdate.message1 = "<\(message.command)>"
-            networkUpdate.message2 = ""
-            networkUpdate.node = node
-            self.updateHandler?(["\(node.name)":networkUpdate], nil)
             return true
         }
         return false
@@ -481,10 +401,6 @@ class ConnectionsManager {
 //            var readData = Data(capacity: ConnectionsManager.bufferSize)
             
             do {
-                var networkUpdate = NetworkUpdate(type: .connected, level: .information, error: .allFine)
-                networkUpdate.node = node
-                self.updateHandler?(["\(node.name)":networkUpdate], nil)
-
                 var randomDuration = Double.random(in: 20 ... 40)
                 print("randomDuration = \(randomDuration)")
                 
@@ -535,14 +451,7 @@ class ConnectionsManager {
                     self.consumeNetworkPackets(node)
                 } while shouldKeepRunning
                 
-                networkUpdate = NetworkUpdate(type: .socketClosing, level: .information, error: .allFine)
-                networkUpdate.node = node
-                self.updateHandler?(["information":networkUpdate], nil)
                 socket.close()
-                networkUpdate = NetworkUpdate(type: .socketClosed, level: .information, error: .allFine)
-                networkUpdate.node = node
-                self.updateHandler?(["information":networkUpdate], nil)
-
                 self.socketLockQueue.sync { [unowned self, socket] in
                     self.connectedSockets[socket.socketfd] = nil
                 }
@@ -560,8 +469,6 @@ class ConnectionsManager {
     }
     
     func shutdownServer() {
-        var networkUpdate = NetworkUpdate(type: .shuttingDown, level: .information, error: .allFine)
-        updateHandler?(["information":networkUpdate], nil)
         print("shuttingDown...")
         self.continueRunning = false
         
@@ -569,11 +476,7 @@ class ConnectionsManager {
         for socket in connectedSockets.values {
             self.socketLockQueue.sync { [unowned self, socket] in
                 self.connectedSockets[socket.socketfd] = nil
-                networkUpdate = NetworkUpdate(type: .socketClosing, level: .information, error: .allFine)
-                updateHandler?(["information":networkUpdate], nil)
                 socket.close()
-                networkUpdate = NetworkUpdate(type: .socketClosed, level: .information, error: .allFine)
-                updateHandler?(["information":networkUpdate], nil)
             }
         }
         print("shutdown")
@@ -581,24 +484,10 @@ class ConnectionsManager {
     
     // MARK: -
 
-    private static func isValidAddress(address: String) -> Bool {
-        
-        // Address must be
-        //     IPV4 ( UInt8 + '.' + UInt8 + '.' + UInt8 + '.' + UInt8 )
-        //     Or
-        //     IPV6 ( UInt32hex + ':'UInt32hex + ':'UInt32hex + ':'UInt32hex + ':'UInt32hex + ':'UInt32hex )
-        
-        // port must be:
-        //     an Unsigned Integer
-        //     between 1-65535
-        //     actually should be between 1024-65535
-        
-        return true
-    }
 }
 
 // MARK: -
-/*
+
 public func testSha256Hashing() {
     if let digest = Digest(using: .sha256).update(string: "abc")?.final(),
         let digest2 = Digest(using: .sha256).update(data: Data(digest))?.final() {
@@ -649,99 +538,3 @@ extension Data {
         return digest2
     }
 }
-*/
-/*
-public func testSha256Hashing() {
-    guard let test1 = "hello".data(using: .utf8) else { print("test1 Error converting 'hello' into Data object"); return }
-    print("hello")
-    print("- sha256 = \(test1.sha256ToHexString)")
-    print("- double sha256 = \(test1.sha256sha256ToHexString)\n")
-    // 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824 (first round of sha-256)
-    // 9595c9df90075148eb06860365df33584b75bff782a510c6cd4883a419833d50 (second round of sha-256)
-    
-    guard let test2 = "abc".data(using: .utf8) else { print("test2 Error converting 'abc' into Data object"); return }
-    print("abc")
-    print("- sha256 = \(test2.sha256ToHexString)")
-    print("- double sha256 = \(test2.sha256sha256ToHexString)\n")
-    // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad (first round of sha-256)
-    // 4f8b42c22dd3729b519ba6f68d2da7cc5b2d606d05daed5ad5128cc03e6c6358 (second round of sha-256)
-
-    guard let test3 = "The quick brown fox jumps over the lazy dog".data(using: .utf8) else { print("test3 Error converting 'The quick brown fox jumps over the lazy dog' into Data object"); return }
-    print("The quick brown fox jumps over the lazy dog")
-    print("- sha256 = \(test3.sha256ToHexString)")
-    print("- double sha256 = \(test3.sha256sha256ToHexString)\n")
-    // d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592 (first round of sha-256)
-    // 6d37795021e544d82b41850edf7aabab9a0ebe274e54a519840c4666f35b3937 (second round of sha-256)
-}
-
-private func hexString(_ iterator: Array<UInt8>.Iterator) -> String {
-    return iterator.map { String(format: "%02x", $0) }.joined()
-}
-
-extension Data {
-
-    public var sha256ToUint8Array: [UInt8] {
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        self.withUnsafeBytes { bytes in
-            _ = CC_SHA256(bytes.baseAddress, CC_LONG(self.count), &hash)
-        }
-        return hash
-    }
-
-    public var sha256ToData: Data {
-//        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        self.withUnsafeBytes { bytes in
-//            _ = CC_SHA256(bytes.baseAddress, CC_LONG(self.count), &hash)
-//        }
-        return Data(self.sha256ToUint8Array)
-    }
-
-    public var sha256ToHexString: String {
-//        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        _ = self.withUnsafeBytes { bytes in
-//            _ = CC_SHA256(bytes.baseAddress, CC_LONG(self.count), &hash)
-//        }
-//        return hexString(hash.makeIterator())
-        return hexString(self.sha256ToUint8Array.makeIterator())
-    }
-
-    public var sha256sha256ToData: Data {
-//        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        _ = self.withUnsafeBytes {
-//            CC_SHA256($0.baseAddress, CC_LONG(self.count), &hash)
-//        }
-//        var hash2 = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        _ = Data(hash).withUnsafeBytes {
-//            CC_SHA256($0.baseAddress, CC_LONG(self.count), &hash2)
-//        }
-        
-        return Data(self.sha256sha256ToUint8Array)
-    }
-
-    public var sha256sha256ToUint8Array: [UInt8] {
-//        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        _ = self.withUnsafeBytes {
-//            CC_SHA256($0.baseAddress, CC_LONG(self.count), &hash)
-//        }
-//        var hash2 = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        _ = Data(hash).withUnsafeBytes {
-//            CC_SHA256($0.baseAddress, CC_LONG(self.count), &hash2)
-//        }
-        return Data(self.sha256ToUint8Array).sha256ToUint8Array
-//        return hash2
-    }
-
-    public var sha256sha256ToHexString: String {
-//        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        _ = self.withUnsafeBytes {
-//            CC_SHA256($0.baseAddress, CC_LONG(self.count), &hash)
-//        }
-//        var hash2 = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-//        _ = Data(hash).withUnsafeBytes {
-//            CC_SHA256($0.baseAddress, CC_LONG(self.count), &hash2)
-//        }
-//        return hexString(hash2.makeIterator())
-        return hexString(sha256sha256ToUint8Array.makeIterator())
-    }
-}
-*/

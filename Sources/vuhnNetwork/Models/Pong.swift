@@ -1,10 +1,7 @@
+// Copyright (c) 2020 Satoshi Nakamoto
 //
-//  Pong.swift
-//  
-//
-//  Created by Phil Wilson on 31/1/20.
-//
-// https://en.bitcoin.it/wiki/Protocol_documentation#pong
+// Distributed under the MIT/X11 software license ( see the accompanying
+// file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
 
@@ -21,8 +18,8 @@ public struct PongMessage {
     }
     
     public static func deserialise(_ uint8Array: [UInt8]) -> PongMessage {
-        var offset = 0
-        var size = MemoryLayout<UInt64>.size
+        let offset = 0
+        let size = MemoryLayout<UInt64>.size
         
         let nonce = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | UInt64(byte)

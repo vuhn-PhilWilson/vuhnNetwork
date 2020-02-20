@@ -1,78 +1,88 @@
+// Copyright (c) 2020 Satoshi Nakamoto
 //
-//  Message.swift
-//  
-//
-//  Created by Phil Wilson on 29/1/20.
-//
+// Distributed under the MIT/X11 software license ( see the accompanying
+// file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
 import Cryptor
 
-public enum CommandType: String, Codable {
-    case Unknown
-    case Version
-    case Verack
-    case Ping
-    case Pong
-    case Addr
-    case Inv
-    case Getheaders
-    case Sendheaders
-    case Sendcmpct
-    
-    var onWireName: String {
-        get {
-            return self.rawValue.lowercased()
-        }
-    }
-    
-    static func offWireName(text: String) -> String {
-        return text.lowercased().capitalized
-    }
-    
-    // Command string is a maximum 12 characters long
-    // Needs to pad with 0x00, not " "
-    var toData: Data {
-        let nameWithPaddingSpaces = self.onWireName.padding(toLength: 12, withPad: " ", startingAt: 0).trimmingCharacters(in: .whitespaces)
-        var nameData = nameWithPaddingSpaces.data(using: .utf8)!
-        nameData.append(contentsOf: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-        nameData.removeLast(nameData.count - 12)
-        return nameData
-    }
-}
-
-// Known magic values:
+// Known fourCC values:
 //
-// Network      Magic value     Sent over wire as
+// Network      FourCC value    Sent over wire as
 // main         0xD9B4BEF9      F9 BE B4 D9
 // testnet      0xDAB5BFFA      FA BF B5 DA
 // testnet3     0x0709110B      0B 11 09 07
 // namecoin     0xFEB4BEF9      F9 BE B4 FE
     
 
+// > fourCC
+//      |
+//      └── UInt32 ( four bytes )
+//      |
+//      └── commands
+//             |
+//             └── command1 ( version )
+//             |
+//             └── command2 ( verack )
+//             |
+//             └── command3 ( ping )
+//             |
+//             └── command4 ( pong )
+//             |
+//             └── command5 ( xx1 )
+//             |
+//             └── command5 ( xx2 )
+//             |
+//             └── command5 ( xx3 )
+
+public struct FourCC: Codable {
+    var characterCode = [UInt8](repeating: 0x00, count: 4)
+
+    public enum Command: String, Codable {
+        case unknown, version, verack, ping, pong
+        case addr, inv, getheaders, sendheaders, sendcmpct
+        
+        // Command string is a maximum 12 characters long
+        // Needs to pad with 0x00, not " "
+        var toData: Data {
+            let nameWithPaddingSpaces = self.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0).trimmingCharacters(in: .whitespaces)
+            var nameData = nameWithPaddingSpaces.data(using: .utf8)!
+            nameData.append(contentsOf: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            nameData.removeLast(nameData.count - 12)
+            return nameData
+        }
+    }
+    
+    var command = Command.unknown
+}
+
 public struct Message: Codable {
-    /// Magic value indicating message origin network,
-    /// and used to seek to next message when stream state is unknown
-    public var magic: UInt32 = 0xe3e1f3e8
+
+    /// FOURCC:
+    /// Class of Message
+    var fourCC: FourCC = FourCC(characterCode: [0xe3, 0xe1, 0xf3, 0xe8], command: .unknown)
     
-    /// ASCII string identifying the packet content, NULL padded
-    /// (non-NULL padding results in packet rejected)
-    public var command: CommandType
+    /// TYPE
+    /// ASCII string identifying the message type for the given class
+    var command: FourCC.Command
     
-    /// Length of payload in number of bytes
-    /// Computed from payload data
-    public var length: UInt32
+    /// LENGTH
+    /// Size of payload in bytes
+    var length: UInt32
     
+    /// CHECKSUM
     /// First 4 bytes of sha256(sha256(payload))
-    /// Computed from payload data
-    public var checksum: Data
+    /// Computed from value data
+     var checksum: Data
     
-    /// The actual data
-    public var payload: Data
+    /// VALUE
+    /// The actual payload data
+    var payload: Data
     
-    public func serialize() -> Data {
+    func serialize() -> Data {
         var data = Data()
-        data += magic.bigEndian.data
+        let characterCode = fourCC.characterCode.reduce(0) { soFar, byte in return soFar << 8 | UInt32(byte) }
+        data += characterCode.bigEndian.data
         data += command.toData
         data += withUnsafeBytes(of: UInt32(payload.count).littleEndian) { Data($0) }
         data += checksum
@@ -80,25 +90,24 @@ public struct Message: Codable {
         return data
     }
     
-    public static func deserialise(_ uint8Array: [UInt8], arrayLength: UInt32) -> Message? {
+    static func deserialise(_ uint8Array: [UInt8], arrayLength: UInt32) -> Message? {
         if uint8Array.count < 24 { return nil }
         var offset = 0
         var size = MemoryLayout<UInt32>.size
         
-        let magic = uint8Array[offset..<(offset + size)].reduce(0) { soFar, byte in
-            return soFar << 8 | UInt32(byte)
-        }
+        let fourBytes = Array(uint8Array[offset..<(offset + size)])
+        let fourCC = FourCC(characterCode: fourBytes, command: .unknown)
         
-        guard magic == 0xe3e1f3e8 else { return nil }
+        guard fourCC.characterCode == [0xe3, 0xe1, 0xf3, 0xe8] else { return nil }
         
         offset += size
         size = MemoryLayout<UInt8>.size * 12
-        var commandType: CommandType? = CommandType.Unknown
+        var commandType: FourCC.Command? = FourCC.Command.unknown
         let commandArray = uint8Array[offset..<(offset + size)].filter { $0 != 0 }
         if let commandString = String(bytes: commandArray, encoding: .utf8) {
-            commandType = CommandType(rawValue: CommandType.offWireName(text: commandString))
+            commandType = FourCC.Command(rawValue: commandString)
             if commandType == nil {
-                commandType = .Unknown
+                commandType = .unknown
             }
         }
         
@@ -113,7 +122,7 @@ public struct Message: Codable {
         let checksum = Array(uint8Array[offset..<(offset + size)])
         
         if arrayLength <= 24 {
-            return Message(magic: magic, command: commandType ?? .Unknown, length: UInt32(length), checksum: Data(checksum), payload: Data())
+            return Message(fourCC: fourCC, command: commandType ?? .unknown, length: UInt32(length), checksum: Data(checksum), payload: Data())
         }
 
         var payload = Data()
@@ -132,7 +141,7 @@ public struct Message: Codable {
         }
         if checksumConfirmed == false { return nil }
 
-        let newMessage = Message(magic: magic, command: commandType ?? .Unknown, length: UInt32(length), checksum: Data(checksum), payload: payload)
+        let newMessage = Message(fourCC: fourCC, command: commandType ?? .unknown, length: UInt32(length), checksum: Data(checksum), payload: payload)
         return newMessage
     }
 }

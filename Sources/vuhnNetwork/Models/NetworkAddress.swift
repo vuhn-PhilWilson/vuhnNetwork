@@ -1,9 +1,7 @@
+// Copyright (c) 2020 Satoshi Nakamoto
 //
-//  NetworkAddress.swift
-//  
-//
-//  Created by Phil Wilson on 27/1/20.
-//
+// Distributed under the MIT/X11 software license ( see the accompanying
+// file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
 import Socket
@@ -98,6 +96,21 @@ public struct NetworkAddress {
             returnPort = portInt
         }
         return (returnAddress, returnPort)
+    }
+    
+    static public func isValidAddress(address: String) -> Bool {
+        
+        // Address must be
+        //     IPV4 ( UInt8 + '.' + UInt8 + '.' + UInt8 + '.' + UInt8 )
+        //     Or
+        //     IPV6 ( UInt32hex + ':'UInt32hex + ':'UInt32hex + ':'UInt32hex + ':'UInt32hex + ':'UInt32hex )
+        
+        // port must be:
+        //     an Unsigned Integer
+        //     between 1-65535
+        //     actually should be between 1024-65535
+        
+        return true
     }
 }
 

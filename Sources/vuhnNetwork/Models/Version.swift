@@ -1,10 +1,7 @@
+// Copyright (c) 2020 Satoshi Nakamoto
 //
-//  Version.swift
-//  
-//
-//  Created by Phil Wilson on 29/1/20.
-//
-// https://en.bitcoin.it/wiki/Protocol_documentation#version
+// Distributed under the MIT/X11 software license ( see the accompanying
+// file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
 
@@ -87,18 +84,18 @@ public struct VersionMessage {
         data += receivingAddress.serialize()
         print("receivingAddress = \(receivingAddress)")
         data += emittingAddress?.serialize() ?? Data(count: 26)
-        print("emittingAddress = \(emittingAddress)")
+        print("emittingAddress = \(emittingAddress ?? NetworkAddress(services: 0, address: "unknown", port: 0))")
         data += withUnsafeBytes(of: nonce?.littleEndian ?? UInt64(0)) { Data($0) }
-        print("nonce = \(nonce)")
+        print("nonce = \(nonce ?? 0)")
         if let userAgent = userAgent {
             data += withUnsafeBytes(of: UInt8(userAgent.count)) { Data($0) }
             data += userAgent.data(using: .utf8) ?? Data([UInt8(0x00)])
         } else {
             data += withUnsafeBytes(of: Data([UInt8(0x00)])) { Data($0) }
         }
-        print("userAgent = \(userAgent)")
+        print("userAgent = \(userAgent ?? "unknown")")
         data += withUnsafeBytes(of: startHeight?.littleEndian ?? Int32(0)) { Data($0) }
-        print("startHeight = \(startHeight)")
+        print("startHeight = \(startHeight ?? -2)")
         if let relay = relay {
             data += relay == true ? Data([UInt8(0x01)]) : Data([UInt8(0x00)])
         } else {
