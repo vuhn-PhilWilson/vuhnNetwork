@@ -80,7 +80,7 @@ public class NodeManager {
         }
         
         let task = Process()
-        task.launchPath = "/usr/bin/env"
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         task.arguments = ["dig",
                           "+short"]
         for seed in dnsSeeds {
