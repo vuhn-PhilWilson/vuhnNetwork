@@ -88,7 +88,13 @@ public class NodeManager {
         }
         let pipe = Pipe()
         task.standardOutput = pipe
-        task.launch()
+        do {
+            try task.run()
+        }
+        catch let error {
+            print("task.run Error reported:\n \(error)")
+            return nil
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         if let addressData = String(data: data, encoding: .utf8) {
             let seedAddresses: [String] = addressData.split(separator: "\n").removingDuplicates().map { String($0) }
