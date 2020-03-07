@@ -17,16 +17,21 @@ public enum NetworkUpdateType {
     case sentVerack
     case sentPing
     case sentPong
+    case sentGetAddr
+    case sentAddr
     
     case receivedVersion
     case receivedVerack
     case receivedPing
     case receivedPong
+    case receivedGetAddr
+    case receivedAddr
     
     case awaitingVersion
     case awaitingVerack
     case awaitingPing
     case awaitingPong
+    case awaitingAddr
     
     case socketClosing
     case socketClosed
@@ -67,6 +72,11 @@ public enum NetworkUpdateType {
         case .receivedInterruptSignal: return "received interrupt signal"
         case .shuttingDown: return "shutting down"
         case .shutDown: return "shutdown"
+        case .sentGetAddr: return "sent GetAddr"
+        case .sentAddr: return "sent Addr"
+        case .receivedGetAddr: return "received GetAddr"
+        case .receivedAddr: return "received Addr"
+        case .awaitingAddr: return "awaiting Addr"
         }
     }
 }

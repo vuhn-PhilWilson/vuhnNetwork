@@ -4,53 +4,29 @@
 // file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
-import Socket
+import NIO
 
 class NetworkService {
     var stillRunning = false
 
     // MARK: - Messages
     
-    func sendMessage(_ node: Node, _ message: Message) {
+    func sendMessage(_ channel: Channel?, _ message: Message) {
+        guard let channel = channel else { return }
         let data = message.serialize()
-
-        _ = data.withUnsafeBytes {
-            guard let pointer = $0.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                print("Error sending message")
-                return
-            }
-            print("sendMessage \(node.name)    \(message.command)")
-            node.outputStream?.write(pointer, maxLength: data.count)
-        }
-    }
-    
-    func sendMessage(_ socket: Socket?, _ message: Message) {
-        guard let socket = socket else { return }
-//        print("Sending \(message.command)")
-        let data = message.serialize()
-        //        let dataArray = [UInt8](data)
-        do {
-            try socket.write(from: data)
-        } catch let error {
-            guard let socketError = error as? Socket.Error else {
-                print("Unexpected error by connection at \(socket.remoteHostname):\(socket.remotePort)...")
-                return
-            }
-            if self.stillRunning {
-                print("Error reported by connection at \(socket.remoteHostname):\(socket.remotePort):\n \(socketError.description)")
-            }
-        }
+        
+            let dataArray = [UInt8](data)
+            var buffer = channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(dataArray)
+            _ =  channel.writeAndFlush(buffer)//.wait()
     }
 
     // MARK: -
     
     // Attempt to consume network packet data
-    func consumeNetworkPackets(_ node: Node) -> Message?{
-        // Extract data
+    func consumeNetworkPackets(_ node: Node) -> Message? {
         if node.packetData.count < 24 { return nil }
-        
         return consumeMessage(node)
-//        while consumeMessage(node) { }
     }
     
     /// Attempt to consume message data.
@@ -87,12 +63,8 @@ class NetworkService {
                 // Still more data to retrive for this message
                 return nil
             }
-            
-//            print("Received \(message.command)")
-
             return message
         }
         return nil
     }
-
 }

@@ -4,7 +4,6 @@
 // file license.txt or http://www.opensource.org/licenses/mit-license.php for template ).
 
 import Foundation
-import Socket
 
 func pton(_ address: String) -> Data {
     var addr = in6_addr()
@@ -29,7 +28,7 @@ public struct NetworkAddress {
         return data
     }
 
-    public static func deserialise(_ uint8Array: [UInt8], arrayLength: UInt32, offset: Int) -> (newAddress: NetworkAddress, updatedOffset: Int) {
+    public static func deserialise(_ uint8Array: [UInt8], offset: Int) -> (newAddress: NetworkAddress, updatedOffset: Int) {
         var offset = offset
         var size = MemoryLayout<UInt64>.size
         let services = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
@@ -43,7 +42,7 @@ public struct NetworkAddress {
         
         offset += size
         size = MemoryLayout<UInt16>.size
-        let port = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
+        let port = uint8Array[offset..<(offset + size)].reduce(0) { soFar, byte in
             return soFar << 8 | UInt16(byte)
         }
         
@@ -68,6 +67,10 @@ public struct NetworkAddress {
 
     private static func ipv6(_ uint8Array: [UInt8]) -> String {
         return stride(from: 0, to: 16 - 1, by: 2).map { String(format: "%02x%02x", uint8Array[$0], uint8Array[$0 + 1]) }.joined(separator: ":")
+    }
+    
+    static public func isIPv4(_ address: String) -> Bool {
+        return address.split(separator: ".").count == 4
     }
     
     static public func extractAddress(_ address: String, andPort port: UInt16 = 8333) -> (address: String, port: UInt16) {
@@ -114,6 +117,12 @@ public struct NetworkAddress {
     }
 }
 
+extension NetworkAddress: Hashable {
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(address.hashValue ^ port.hashValue)
+    }
+    
+}
 
 extension Data {
     public init?(hex: String) {

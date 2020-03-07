@@ -6,11 +6,56 @@
 //
 
 import Foundation
-import Socket
+import CoreFoundation
+#if os(Linux)
+    import Glibc
+#else
+    import Darwin
+#endif
+import NIO
+// https://github.com/apple/swift-nio/blob/master/Sources/NIOChatClient/main.swift
 
 // https://www.raywenderlich.com/3437391-real-time-communication-with-streams-tutorial-for-ios
 
-public class Node: NSObject, StreamDelegate {
+public protocol NodeDelegate {
+    func didConnectNode(_ node: Node)
+    func didDisconnectNode(_ node: Node)
+    
+    func didReceiveNetworkAddresses(_ node: Node, _ addresses: [(TimeInterval, NetworkAddress)])
+}
+
+public class NodeInboundHandler: ChannelInboundHandler {
+    
+    var node: Node
+    
+    public typealias InboundIn = ByteBuffer
+    public typealias OutboundOut = ByteBuffer
+    
+    init(with node: Node) {
+        self.node = node
+    }
+    
+    private func printByte(_ byte: UInt8) {
+        #if os(Android)
+        print(Character(UnicodeScalar(byte)),  terminator:"")
+        #else
+        fputc(Int32(byte), stdout)
+        #endif
+    }
+    
+    public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let buffer = self.unwrapInboundIn(data)
+        node.packetData.append(contentsOf: buffer.readableBytesView)
+        node.handleInboundChannelData()
+    }
+
+    public func errorCaught(context: ChannelHandlerContext, error: Error) {
+        print("error: ", error)
+        context.close(promise: nil)
+    }
+}
+
+public class Node: NSObject {
     
     public enum ConnectionType {
         case outBound
@@ -28,6 +73,7 @@ public class Node: NSObject, StreamDelegate {
     
     public var nodeID: UInt64 {
         get {
+            // If no name then node is invalid ?
             let nameData = self.name.data(using: .utf8) ?? Data([UInt8(0x00)])
             let hash = [UInt8](nameData.doubleSHA256ToData[0..<8]).reduce(0) { soFar, byte in
                 return soFar << 8 | UInt64(byte)
@@ -35,139 +81,57 @@ public class Node: NSObject, StreamDelegate {
             return hash
         }
     }
-
-    private let maxReadLength = 4096
-    public var inputStream: InputStream?
-    public var outputStream: OutputStream?
     
-    var randomDuration = Double.random(in: 20 ... 40)
+    public var outputChannel: Channel?
+    public var inputChannel: Channel?
+    private let maxReadLength = 4096
+    
+    var randomDuration = Double.random(in: 10 ... 40)
     
     // MARK: -
     
     public func connect() {
-        if socket == nil {
-            print("Outgoing connection")
-            Stream.getStreamsToHost(withName: address, port: Int(port), inputStream: &inputStream, outputStream: &outputStream)
-            if inputStream == nil || outputStream == nil {
-                print("\(name) getStreamsToHost failed")
-                return
-            }
-            
-            inputStream?.delegate = self
-            outputStream?.delegate = self
-            
-            inputStream?.schedule(in: .current, forMode: .default)
-            outputStream?.schedule(in: .current, forMode: .default)
-            
-            inputStream?.open()
-            outputStream?.open()
-
-        } else if let socket = socket {
-            print("Incoming connection")
-            let queue = DispatchQueue.global(qos: .default)
-            queue.async { [unowned self, socket] in
-                do {
-                    
-                    repeat {
-                        if self.sentVersion == false {
-                            self.sendVersionMessage(self)
-                        }
-                        
-                        self.checkForPing()
-
-                        var readData = Data(capacity: self.maxReadLength)
-                        while try socket.isReadableOrWritable().readable {
-                            let bytesRead = try socket.read(into: &readData)
-                            if bytesRead == 0
-                                && socket.remoteConnectionClosed == true {
-                                self.shouldKeepRunning = false
-                                break
-                            }
-                            if bytesRead > 0 {
-                                self.packetData.append(readData)
-                            }
-                            readData.count = 0
-                        }
-                        if self.packetData.count == 0 { continue }
-                        print("\(self.name) packetData.count \(self.packetData.count)")
-                        self.processData()
-                        
-                    } while self.shouldKeepRunning
-                    
-                    print("\(self.name) closing socket \(socket.remoteHostname):\(socket.remotePort)...")
-                    socket.close()
-                }
-                catch let error {
-                    guard let socketError = error as? Socket.Error else {
-                        print("\(self.name) addNewConnection Unexpected error by connection at \(socket.remoteHostname):\(socket.remotePort)...")
-                        return
-                    }
-                    print("\(self.name) addNewConnection Error reported by connection at \(socket.remoteHostname):\(socket.remotePort):\n \(socketError.description)")
-                }
-            }
+        print("Outgoing NIO connection")
+        if !connectUsingNIO() {
+            print("Failed to connect to \(name) \(connectionType)")
+            return
         }
-
         print("Connected to \(name) \(connectionType)")
+        nodeDelegate?.didConnectNode(self)
     }
     
     public func disconnect() {
         print("\(name) \(connectionType) disconnected")
-        if socket == nil {
-            socket?.close()
-            socket = nil
-        }
-        inputStream?.delegate = nil
-        outputStream?.delegate = nil
-        inputStream?.remove(from: .current, forMode: .default)
-        outputStream?.remove(from: .current, forMode: .default)
-        inputStream?.close()
-        outputStream?.close()
+        shutDownPingTimer()
+        shutDownGetAddrTimer()
+        _ = self.inputChannel?.close()
+        _ = self.outputChannel?.close()
+        nodeDelegate?.didDisconnectNode(self)
     }
     
-    public func stream(_ stream: Stream, handle eventCode: Stream.Event) {
-        switch stream {
-        case let stream as InputStream:
-            switch eventCode {
-            case .openCompleted:
-                print("open completed")
-            case .hasBytesAvailable:
-//                print("has bytes available")
-                readAvailableBytes(stream: stream)
-            case .endEncountered,.errorOccurred:
-                print("end or error occurred")
-                disconnect()
-            default:
-                print("some other event...")
-            }
-        case _ as OutputStream:
-            switch eventCode {
-            case .openCompleted:
-                print("open completed")
-            case .hasSpaceAvailable:
-//                print("has space available")
-                if sentVersion == false {
-                    sendVersionMessage(self)
-                }
-            case .endEncountered,.errorOccurred:
-                print("end or error occurred")
-                disconnect()
-            default:
-                print("some other event...")
-            }
-        default:
-            print("\(name) \(connectionType) Unknown stream type")
+    private func checkForGetAddr() {
+
+        if receivedVerack == true
+            && sentGetAddr == true
+            && receivedGetAddrResponse == false {
+            print("\(name) sent GetAddr but did not receive Addr")
+            shouldKeepRunning = false
+            disconnect()
+            return
+        }
+        
+        if receivedVerack == true
+            && sentGetAddr == false
+            && receivedGetAddrResponse == false {
+            sendGetAddrMessage()
         }
     }
+
     private func checkForPing() {
-//        print("\(name) <<<< checkForPing")
-        
-        // Send a Ping message periodically
-        // to check whether the remote node is still around
-        let elapsedTime = (NSDate().timeIntervalSince1970 - lastPingReceivedTimeInterval)
+
         // If we've already sent a ping and haven't received a pong,
         // then disconnect from this node
         if receivedVerack == true
-            && elapsedTime > (randomDuration)
             && sentPing == true
             && receivedPong == false {
             print("\(name) sent Ping but did not receive Pong")
@@ -176,36 +140,17 @@ public class Node: NSObject, StreamDelegate {
             return
         }
         
-        if receivedVerack == true
-            && elapsedTime > (randomDuration) {
-            randomDuration = Double.random(in: 20 ... 40)
-            print("\(name) randomDuration = \(randomDuration)")
-            sendPingMessage(self)
+        if receivedVerack == true {
+            sendPingMessage()
         }
-//        print("\(name) >>>> checkForPing")
-    }
-    private func readAvailableBytes(stream: InputStream) {
-        
-        checkForPing()
-
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: maxReadLength)
-        defer { buffer.deallocate() }
-        
-        while stream.hasBytesAvailable {
-            guard let numberOfBytesRead = inputStream?.read(buffer, maxLength: maxReadLength) else { return }
-            
-            if numberOfBytesRead > 0 {
-                packetData += Data(bytesNoCopy: buffer, count: numberOfBytesRead, deallocator: .none)
-            } else {
-                if let error = stream.streamError { print(error); break }
-            }
-        }
-        
-        processData()
     }
     
+    public func handleInboundChannelData() {
+        processData()
+    }
+
     private func processData() {
-        
+
         if packetData.count >= 24,
             let message = networkService.consumeMessage(self) {
             receivedCommand = message.command
@@ -222,11 +167,11 @@ public class Node: NSObject, StreamDelegate {
             case .version:
                 self.receiveVersionMessage(self, dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
             case .verack:
-                self.receiveVerackMessage(self)
+                self.receiveVerackMessage()
             case .ping:
-                self.receivePingMessage(self, dataByteArray: payloadByteArray)
+                self.receivePingMessage(dataByteArray: payloadByteArray)
             case .pong:
-                let (expectedNonce, receivedNonce) = self.receivePongMessage(self, dataByteArray: payloadByteArray)
+                let (expectedNonce, receivedNonce) = self.receivePongMessage(dataByteArray: payloadByteArray)
                 if expectedNonce != receivedNonce {
                     // Nonces do not match
                     // Need to set this node as bad
@@ -234,6 +179,14 @@ public class Node: NSObject, StreamDelegate {
                 }
                 
             case .addr:
+                receivedAddr = true
+                if sentGetAddr == true
+                    && receivedGetAddrResponse == false {
+                    receivedGetAddrResponse = true
+                    shutDownGetAddrTimer()
+                    print("received GetAddr Response")
+                }
+                receiveAddrMessage(dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
                 break
             case .inv:
                 break
@@ -250,6 +203,8 @@ public class Node: NSObject, StreamDelegate {
             case .xversion:
                 break
             case .xverack:
+                break
+            case .getaddr:
                 break
             }
         }
@@ -270,13 +225,16 @@ public class Node: NSObject, StreamDelegate {
     var receivedPing = false
     var receivedPong = false
     
+    var sentGetAddr = false
+    var receivedAddr = false
+    
     var lastPingReceivedTimeInterval: TimeInterval
     
     public var packetData: Data
     
     public var address: String
     public var port: UInt16
-    var socket: Socket?
+//    var socket: Socket?
     public var connectionType = ConnectionType.unknown
     
     /// Identifies protocol version being used by the node
@@ -290,6 +248,13 @@ public class Node: NSObject, StreamDelegate {
     
     var theirNodePingNonce: UInt64?
     var myPingNonce: UInt64?
+    private var pingTimer : DispatchSourceTimer?
+    
+    var receivedGetAddrResponse = false
+    var getAddrRandomDuration = Double.random(in: 10 ... 40)
+    var connectionFirstMadeTimeInterval: TimeInterval
+    private var getAddrTimer : DispatchSourceTimer?
+
     
     /// User Agent (0x00 if string is 0 bytes long)
     /// The user agent that generated messsage.
@@ -325,7 +290,10 @@ public class Node: NSObject, StreamDelegate {
     public var src: String?
     public var srcServices: UInt64?
     
-    public init(address: String, port: UInt16 = 8333) {
+    public var nodeDelegate: NodeDelegate?
+    
+    public init(address: String, port: UInt16 = 8333, nodeDelegate: NodeDelegate? = nil) {
+        self.nodeDelegate = nodeDelegate
         let (anAddress, aPort) = NetworkAddress.extractAddress(address, andPort: port)
         self.version = 0x00
         self.address = anAddress
@@ -339,6 +307,11 @@ public class Node: NSObject, StreamDelegate {
         self.relay = nil
         self.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
         self.packetData = Data()
+        self.randomDuration = Double.random(in: 10 ... 40)
+        self.connectionFirstMadeTimeInterval = NSDate().timeIntervalSince1970
+        self.getAddrRandomDuration = Double.random(in: 10 ... 40)
+        super.init()
+        print("\(name) randomDuration = \(randomDuration)")
     }
     
     public func serializeForDisk() -> Data {
@@ -359,19 +332,19 @@ public class Node: NSObject, StreamDelegate {
     
     // MARK: - Messages
     
-    public func sendVersionMessage(_ node: Node) {
-        node.sentCommand = .version
-        print("\(node.name) sent \(node.sentCommand)")
-        node.sentNetworkUpdateType = .sentVersion
-        node.sentVersion = true
+    public func sendVersionMessage() {
+        sentCommand = .version
+        print("\(name) sent \(sentCommand)")
+        sentNetworkUpdateType = .sentVersion
+        sentVersion = true
         
         let version = VersionMessage(version: protocolVersion,
                                      services: 0x425, // (1061)
             //services: 0x125, // (293) SFNodeNetwork|SFNodeBloom|SFNodeBitcoinCash|SFNodeCF == 37 1 0 0 0 0 0 0
             timestamp: Int64(Date().timeIntervalSince1970),
             receivingAddress: NetworkAddress(services: 0x00,
-                                             address: "::ffff:\(node.address)",
-                port: UInt16(node.port)),
+                                             address: "::ffff:\(address)",
+                port: UInt16(port)),
             emittingAddress: nil,
             nonce: 16009251466998072645,
             userAgent: yourUserAgent,
@@ -382,15 +355,15 @@ public class Node: NSObject, StreamDelegate {
         
         let message = Message(command: .version, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         
-        if node.socket != nil {
-            networkService.sendMessage(node.socket, message)
-        } else {
-            networkService.sendMessage(self, message)
-        }
+        networkService.sendMessage(
+            connectionType == .inBound
+                ? inputChannel
+                : outputChannel,
+            message)
     }
     
     public func receiveVersionMessage(_ node: Node, dataByteArray: [UInt8], arrayLength: UInt32) {
-        //        print("received \(node.receivedCommand)")
+        print("received \(node.receivedCommand)")
         guard let versonMessage = VersionMessage.deserialise(dataByteArray, arrayLength: arrayLength) else { return }
         node.version = versonMessage.version
         node.theirUserAgent = versonMessage.userAgent
@@ -407,12 +380,18 @@ public class Node: NSObject, StreamDelegate {
         }
     }
     
-    public func receiveVerackMessage(_ node: Node) {
-        //        print("received \(node.receivedCommand)")
-        node.receivedVerack = true
-        node.receivedNetworkUpdateType = .receivedVerack
+    public func receiveVerackMessage() {
+        print("received \(receivedCommand)")
+        receivedVerack = true
+        receivedNetworkUpdateType = .receivedVerack
+        receivedVerack = true
+
         
-        node.receivedVerack = true
+        // Start timer for checking PING
+        startPingTimer()
+        
+        // Start timer for sending GetAddr and checking its associated Addr
+        startGetAddrTimer()
     }
     
     public func sendVerackMessage(_ node: Node) {
@@ -424,73 +403,183 @@ public class Node: NSObject, StreamDelegate {
         let payload = verackMessage.serialize()
         let message = Message(command: .verack, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
 
-        if node.socket != nil {
-            networkService.sendMessage(node.socket, message)
-        } else {
-            networkService.sendMessage(self, message)
-        }
+//        if node.socket != nil {
+//            networkService.sendMessage(node.socket, message)
+//        } else {
+    networkService.sendMessage(
+        node.connectionType == .inBound
+            ? node.inputChannel
+            : node.outputChannel,
+        message)
+//        }
     }
     
-    public func sendPingMessage(_ node: Node) {
-        node.sentCommand = .ping
-        print("sent \(node.sentCommand)")
-        node.sentNetworkUpdateType = .sentPing
-        node.sentPing = true
-        node.receivedPong = false
-        node.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
-        node.myPingNonce = generateNonce()
+    public func sendPingMessage() {
+        sentCommand = .ping
+        print("\(name) sent \(sentCommand)  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  ")
+        sentNetworkUpdateType = .sentPing
+        sentPing = true
+        receivedPong = false
+        lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
+        myPingNonce = generateNonce()
         
-        let pingMessage = PingMessage(nonce: node.myPingNonce)
+        let pingMessage = PingMessage(nonce: myPingNonce)
         let payload = pingMessage.serialize()
         let message = Message(command: .ping, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         
-        if node.socket != nil {
-            networkService.sendMessage(node.socket, message)
-        } else {
-            networkService.sendMessage(self, message)
-        }
+        networkService.sendMessage(
+            connectionType == .inBound
+                ? inputChannel
+                : outputChannel,
+            message)
     }
     
-    public func receivePongMessage(_ node: Node, dataByteArray: [UInt8]) -> (expectedNonce: UInt64, receivedNonce: UInt64) {
-        //        print("received \(node.receivedCommand)")
-        node.receivedNetworkUpdateType = .receivedPong
-        node.receivedPong = true
+    public func receivePongMessage(dataByteArray: [UInt8]) -> (expectedNonce: UInt64, receivedNonce: UInt64) {
+        print("\(name) received \(receivedCommand)  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  ")
+        receivedNetworkUpdateType = .receivedPong
+        receivedPong = true
         
         // Compare Nonce with the one we sent
         // Only if this remote node uses Nonces with Ping/Pong
         let pongMessage = PongMessage.deserialise(dataByteArray)
-        if let mine = node.myPingNonce,
+        if let mine = myPingNonce,
             let theirs = pongMessage.nonce {
             return (expectedNonce: mine, receivedNonce: theirs)
         }
         return (0, 1)
     }
     
-    public func receivePingMessage(_ node: Node, dataByteArray: [UInt8]) {
-        //        print("received \(node.receivedCommand)")
-        node.receivedNetworkUpdateType = .receivedPing
-        node.receivedPing = true
+    public func receivePingMessage(dataByteArray: [UInt8]) {
+        print("received \(receivedCommand)")
+        receivedNetworkUpdateType = .receivedPing
+        receivedPing = true
         
         let pingMessage = PingMessage.deserialise(dataByteArray)
-        node.theirNodePingNonce = pingMessage.nonce
-        
-        sendPongMessage(node)
+        theirNodePingNonce = pingMessage.nonce
+        sendPongMessage()
     }
     
-    public func sendPongMessage(_ node: Node) {
-        node.sentCommand = .pong
-        print("sent \(node.sentCommand)")
-        node.sentPong = true
-        node.sentNetworkUpdateType = .sentPong
+    public func sendPongMessage() {
+        sentCommand = .pong
+        print("sent \(sentCommand)")
+        sentPong = true
+        sentNetworkUpdateType = .sentPong
         
-        let pongMessage = PongMessage(nonce: node.theirNodePingNonce)
+        let pongMessage = PongMessage(nonce: theirNodePingNonce)
         let payload = pongMessage.serialize()
         let message = Message(command: .pong, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
+        networkService.sendMessage(
+            connectionType == .inBound
+                ? inputChannel
+                : outputChannel,
+            message)
+    }
+
+    public func sendGetAddrMessage() {
+        sentCommand = .getaddr
+        print("\(name) sent \(sentCommand)  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  ")
+        sentNetworkUpdateType = .sentGetAddr
+        sentGetAddr = true
+        receivedGetAddrResponse = false
+
+        let payload = GetAddrMessage().serialize()
+        let message = Message(command: sentCommand, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         
-        if node.socket != nil {
-            networkService.sendMessage(node.socket, message)
-        } else {
-            networkService.sendMessage(self, message)
+        networkService.sendMessage(
+            connectionType == .inBound
+                ? inputChannel
+                : outputChannel,
+            message)
+    }
+    
+    public func receiveAddrMessage(dataByteArray: [UInt8], arrayLength: UInt32) {
+        guard let addrMessage = AddrMessage.deserialise(dataByteArray) else {
+            print("receiveAddrMessage \(name) failed to extract addresses 😢")
+            return
         }
+        let addresses: [(TimeInterval, NetworkAddress)] = addrMessage.networkAddresses
+        let numberOfAddresses = addresses.count
+        print("\(name): received \(numberOfAddresses) addresses")
+        
+        nodeDelegate?.didReceiveNetworkAddresses(self, addresses)
+    }
+        
+    // MARK: - NIO
+
+    public func connectUsingNIO() -> Bool {
+        
+        let nodeInboundHandler = NodeInboundHandler(with: self)
+        let bootstrap = ClientBootstrap(group: NodeManager.eventLoopGroup)
+            .connectTimeout(TimeAmount.seconds(5))
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelInitializer { channel in
+            channel.pipeline.addHandler(nodeInboundHandler)
+        }
+        
+        do {
+            outputChannel = try { () -> Channel in
+                return try bootstrap.connect(host: address, port: Int(port)).wait()
+                }()
+        }
+        catch let error {
+            // is error reported on connection close ?
+            print("Error connecting to output channel:\n \(error.localizedDescription)")
+            return false
+        }
+        if let outputChannel = outputChannel {
+            print("This Client connected to Remote Server: \(outputChannel.remoteAddress!)\n. Press ^C to exit.")
+
+            connectionFirstMadeTimeInterval = NSDate().timeIntervalSince1970
+            if sentVersion == false {
+                sendVersionMessage()
+            }
+            
+            return true
+        }
+        return false
+    }
+    
+    public func startPingTimer() {
+        pingTimer = DispatchSource.makeTimerSource(flags: [], queue: DispatchQueue.main)
+        
+        let delay: DispatchTime = .now() + .seconds(Int(randomDuration))
+        pingTimer?.schedule(deadline: delay, repeating: .seconds(Int(randomDuration)))
+        pingTimer?.setEventHandler
+        {
+            if self.shouldKeepRunning == false {
+                self.shutDownPingTimer()
+                return
+            }
+            self.checkForPing()
+        }
+        pingTimer?.resume()
+    }
+
+    public func startGetAddrTimer() {
+        getAddrTimer = DispatchSource.makeTimerSource(flags: [], queue: DispatchQueue.main)
+        
+        let delay: DispatchTime = .now() + .seconds(Int(getAddrRandomDuration))
+        getAddrTimer?.schedule(deadline: delay, repeating: .seconds(Int(getAddrRandomDuration)))
+        getAddrTimer?.setEventHandler
+        {
+            if self.shouldKeepRunning == false {
+                self.shutDownGetAddrTimer()
+                return
+            }
+            self.checkForGetAddr()
+        }
+        getAddrTimer?.resume()
+    }
+    
+    private func shutDownPingTimer() {
+        print("shutDown Ping Timer")
+        pingTimer?.cancel()
+        pingTimer?.setEventHandler {}
+    }
+    
+    private func shutDownGetAddrTimer() {
+        print("shutDown GetAddr Timer")
+        getAddrTimer?.cancel()
+        getAddrTimer?.setEventHandler {}
     }
 }
