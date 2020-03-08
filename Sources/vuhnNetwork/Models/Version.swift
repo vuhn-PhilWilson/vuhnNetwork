@@ -128,7 +128,7 @@ public struct VersionMessage {
         print("timestamp = \(timestamp)")
         
         offset += size
-        var (newAddress, updatedOffset) = NetworkAddress.deserialise(uint8Array, arrayLength: arrayLength, offset: offset)
+        var (newAddress, updatedOffset) = NetworkAddress.deserialise(uint8Array, offset: offset)
         offset = updatedOffset
         let receivingAddress = newAddress
         print("receivingAddress = \(receivingAddress)")
@@ -137,7 +137,7 @@ public struct VersionMessage {
             return VersionMessage(version: version, services: services, timestamp: timestamp, receivingAddress: receivingAddress, emittingAddress: nil, nonce: nil, userAgent: nil, startHeight: nil, relay: nil)
         }
         
-        (newAddress, updatedOffset) = NetworkAddress.deserialise(uint8Array, arrayLength: arrayLength, offset: offset)
+        (newAddress, updatedOffset) = NetworkAddress.deserialise(uint8Array, offset: offset)
         offset = updatedOffset
         let emittingAddress = newAddress
         print("emittingAddress = \(emittingAddress)")

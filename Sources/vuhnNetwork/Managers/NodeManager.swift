@@ -9,10 +9,165 @@
     import Darwin
 #endif
 import Foundation
-import Socket
 import Cryptor
+import NIO
+// https://github.com/apple/swift-nio/blob/master/Sources/NIOChatClient/main.swift
 
-public class NodeManager {
+final class ServerInboundHandler: ChannelInboundHandler {
+    public typealias InboundIn = ByteBuffer
+    public typealias OutboundOut = ByteBuffer
+
+    // All access to channels is guarded by channelsSyncQueue.
+    private let channelsSyncQueue = DispatchQueue(label: "channelsQueue")
+    private var channels: [ObjectIdentifier: Channel] = [:]
+    
+    private var nodeManager: NodeManager?
+    
+    init(with nodeManager: NodeManager) {
+        self.nodeManager = nodeManager
+    }
+    
+    public func channelActive(context: ChannelHandlerContext) {
+        print("server channelActive \(context.remoteAddress!) => \(context.localAddress!)")
+        let remoteAddress = context.remoteAddress!
+        let channel = context.channel
+        channels[ObjectIdentifier(channel)] = channel
+        
+        if let ipAddress = remoteAddress.ipAddress,
+            let port = remoteAddress.port {
+            let node = Node(address: ipAddress, port: UInt16(port), nodeDelegate: nodeManager)
+            node.connectionType = .inBound
+            node.inputChannel = channel
+            nodeManager?.nodes.append(node)
+            nodeManager?.didConnectNode(node)
+            node.sendVersionMessage()
+            node.startPingTimer()
+            print("server channelActive inBound node added: \(context.remoteAddress!) => \(context.localAddress!)")
+        }
+    }
+    
+    public func channelInactive(context: ChannelHandlerContext) {
+        print("server channelInactive \(context.remoteAddress!) => \(context.localAddress!)")
+        let channel = context.channel
+        channels.removeValue(forKey: ObjectIdentifier(channel))
+        if let node = nodeManager?.nodes.filter({
+            if let channelToCheck = $0.inputChannel,
+                channelToCheck.remoteAddress == context.channel.remoteAddress {
+                return true
+            }
+            return false
+        }).first {
+            nodeManager?.nodes.removeAll(where: { (nodeToCheck) -> Bool in
+                nodeToCheck.name == node.name
+            })
+            node.disconnect()
+        }
+    }
+
+    public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        print("server channelRead \(context.remoteAddress!) => \(context.localAddress!)")
+        let buffer = self.unwrapInboundIn(data)
+        
+        // Find which node this channel belongs to
+        if let node = nodeManager?.nodes.filter({
+            if let channelToCheck = $0.inputChannel,
+                channelToCheck.remoteAddress == context.channel.remoteAddress {
+                return true
+            }
+            return false
+        }).first {
+            node.packetData.append(contentsOf: buffer.readableBytesView)
+
+            print("server channelRead \(node.name)  \(context.remoteAddress!) => \(context.localAddress!) node.packetData count \(node.packetData.count)")
+            node.handleInboundChannelData()
+        } else {
+            print("server channelRead \(context.remoteAddress!) => \(context.localAddress!) node not found")
+        }
+    }
+
+    public func errorCaught(context: ChannelHandlerContext, error: Error) {
+        print("error: ", error)
+
+        // As we are not really interested getting notified on success or failure we just pass nil as promise to
+        // reduce allocations.
+        context.close(promise: nil)
+    }
+
+    private func writeToAll(channels: [ObjectIdentifier: Channel], allocator: ByteBufferAllocator, message: String) {
+        var buffer =  allocator.buffer(capacity: message.utf8.count)
+        buffer.writeString(message)
+        self.writeToAll(channels: channels, buffer: buffer)
+    }
+
+    private func writeToAll(channels: [ObjectIdentifier: Channel], buffer: ByteBuffer) {
+        channels.forEach { $0.value.writeAndFlush(buffer, promise: nil) }
+    }
+}
+
+public class NodeManager: NodeDelegate {
+    
+    // MARK: - NodeDelegate
+
+    public func didConnectNode(_ node: Node) {
+        // serialize/ deserialize to have v4 addresses prepended with
+        // "0000:0000:0000:0000:0000:ffff"
+        var networkAddress = node.emittingAddress
+        if NetworkAddress.isIPv4(node.emittingAddress.address) {
+            let address = "0000:0000:0000:0000:0000:ffff:" + node.emittingAddress.address
+            networkAddress = NetworkAddress(services: node.emittingAddress.services, address: address, port: node.emittingAddress.port)
+            node.emittingAddress = networkAddress
+            print("🥝  updated node.emittingAddress \(node.emittingAddress)")
+        }
+        let timestamp = NSDate().timeIntervalSince1970
+        if !networkAddresses.contains(where: { (arg0) -> Bool in
+            let (_, networkAddressToCheck) = arg0
+            return networkAddressToCheck.address == networkAddress.address
+                && networkAddressToCheck.port == networkAddress.port
+        }) {
+            networkAddresses.append((timestamp, networkAddress))
+//            print("networkAddresses array added \(networkAddress.address):\(networkAddress.port)       count = \(networkAddresses.count)")
+        } else {
+//            print("networkAddresses array already contains \(networkAddress.address):\(networkAddress.port)       count = \(networkAddresses.count)")
+        }
+    }
+
+    public func didDisconnectNode(_ node: Node) {
+        nodes.removeAll(where: { (nodeToCheck) -> Bool in
+            nodeToCheck.name == node.name
+        })
+    }
+
+    public func didReceiveNetworkAddresses(_ node: Node, _ addresses: [(TimeInterval, NetworkAddress)]) {
+
+        DispatchQueue.main.async {
+            var additionsCount = 0
+            for index in 0..<addresses.count {
+                let (timestamp, networkAddress) = addresses[index]
+                if !self.networkAddresses.contains(where: { (arg0) -> Bool in
+                    let (_, networkAddressToCheck) = arg0
+                    return networkAddressToCheck.address == networkAddress.address
+//                        && networkAddressToCheck.port == networkAddress.port
+                }) {
+                    self.networkAddresses.append((timestamp, networkAddress))
+                    additionsCount += 1
+//                    print("networkAddresses array added \(networkAddress.address):\(networkAddress.port)       count = \(self.networkAddresses.count)")
+                } else {
+//                    print("networkAddresses array already contains \(networkAddress.address):\(networkAddress.port)       count = \(self.networkAddresses.count)")
+                }
+            }
+            print("Added \(additionsCount) to networkAddresses")
+            let alladdresses = self.networkAddresses.map {
+                $0.1
+            }
+            let addressesSet: Set<NetworkAddress> = Set(alladdresses)
+            print("addressesSet unique count \(addressesSet.count)")
+        }
+    }
+    
+    // MARK: -
+    
+    static let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+    static var serverChannel: Channel?
     
     enum Constants {
         static let pingDuration: Double = 10000 // 10 seconds
@@ -26,22 +181,25 @@ public class NodeManager {
     
     // MARK: - Private Properties
     
+    
+    public var networkAddresses = [(TimeInterval, NetworkAddress)]()
+    
     static let bufferSize = 4096
     
     var listeningPort: Int = -1
-    var listeningSocket: Socket? = nil
     var continueRunningValue = true
-    var connectedSockets = [Int32: Socket]()
-    let socketLockQueue = DispatchQueue(label: "hn.vu.outboundConnections.socketLockQueue")
+    private let serialQueue = DispatchQueue(label: "hn.vu.serial.queue")
+    private let concurrentQueue = DispatchQueue(label: "hn.vu.concurrent.queue", attributes: .concurrent)
+    
     var continueRunning: Bool {
         set(newValue) {
             networkService.stillRunning = newValue
-            socketLockQueue.sync {
+            serialQueue.sync {
                 self.continueRunningValue = newValue
             }
         }
         get {
-            return socketLockQueue.sync {
+            return serialQueue.sync {
                 self.continueRunningValue
             }
         }
@@ -52,22 +210,67 @@ public class NodeManager {
     public init() { }
         
     deinit {
-        for socket in connectedSockets.values {
-            socket.close()
-        }
-        self.listeningSocket?.close()
+        close()
     }
         
     public func close() {
         shutdownServer()
     }
     
-    public func configure(with addresses: [String], and listeningPort: Int = 8333) {
+    // MARK: - DNS Seeding
+    
+    public func dnsSeedAddresses() -> [String]? {
+        let dnsSeeds = [
+            "seed.bitcoinabc.org",                      // - Bitcoin ABC seeder
+            "seed-abc.bitcoinforks.org",                // - bitcoinforks seeders
+            "btccash-seeder.bitcoinunlimited.info",     // - BU seeder  uses xversion/xverack
+            "seed.bchd.cash",                           // - BCHD
+        ]
 
+        let maxLength = dnsSeeds.map { Int($0.count) }.max() ?? 0
+        for hostName in dnsSeeds {
+            let remoteHostEntry = gethostbyname2(hostName, AF_INET)
+            let remoteAddr = UnsafeMutableRawPointer(remoteHostEntry?.pointee.h_addr_list[0])
+            var ipAddress = [Int8](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            inet_ntop(AF_INET, remoteAddr, &ipAddress, socklen_t(INET6_ADDRSTRLEN))
+            print("\(hostName.padding(toLength: maxLength, withPad: " ", startingAt: 0)) = \(String(cString: ipAddress))")
+        }
+        
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = ["dig",
+                          "+short"]
+        for seed in dnsSeeds {
+            task.arguments?.append(seed)
+        }
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        do {
+            try task.run()
+        }
+        catch let error {
+            print("task.run Error reported:\n \(error)")
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        if let addressData = String(data: data, encoding: .utf8) {
+            let seedAddresses: [String] = addressData.split(separator: "\n").removingDuplicates().map { String($0) }
+            print("\n\(seedAddresses.count) seed addresses")
+//            for (index, address) in seedAddresses.enumerated() {
+//                print("\(index)\t\(address)")
+//            }
+            return seedAddresses
+        }
+        return nil
+    }
+    
+    // MARK: - Start
+    
+    public func configure(with addresses: [String], and listeningPort: Int = 8333) {
         self.listeningPort = listeningPort
         for address in addresses {
             if NetworkAddress.isValidAddress(address: address) {
-                let node = Node(address: address)
+                let node = Node(address: address, nodeDelegate: self)
                 node.connectionType = .outBound
                 nodes.append(node)
             }
@@ -75,373 +278,64 @@ public class NodeManager {
     }
     
     public func startListening() {
-        if listeningPort == -1 { return }
-        let queue = DispatchQueue.global(qos: .userInteractive)
+        print("System core count \(System.coreCount)")
         
-        queue.async { [unowned self] in
+        let serverInboundHandler = ServerInboundHandler(with: self)
+        let bootstrap = ServerBootstrap(group: NodeManager.eventLoopGroup)
+            // Specify backlog and enable SO_REUSEADDR for the server itself
+            .serverChannelOption(ChannelOptions.backlog, value: 256)
+            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
             
-            do {
-                // Create an IPV4 socket...
-                // VirtualBox running Ubuntu cannot see IPV6 local connections
-                try self.listeningSocket = Socket.create(family: .inet)
-                
-                guard let socket = self.listeningSocket else {
-                    print("Unable to unwrap socket...")
-                    return
-                }
-
-                print("startListening() socket.listen self.listenPort  \(self.listeningPort)")
-                try socket.listen(on: self.listeningPort)
-                
-                repeat {
-                    let newSocket = try socket.acceptClientConnection()
-
-                    // Set how long we'll wait with no received
-                    // data before we Ping the remote node
-                    try newSocket.setReadTimeout(value: UInt(Constants.pingDuration))
-
-                    print("startListening() newSocket.remoteHostname  \(newSocket.remoteHostname)    newSocket.remotePort  \(newSocket.remotePort)")
-                    
-                    let node = Node(address: newSocket.remoteHostname, port: UInt16(newSocket.remotePort))
-                    node.connectionType = .inBound
-                    node.socket = newSocket
-                    self.nodes.append(node)
-                    print("startListening() Other node connecting to us...")
-                    print("calling addNewConnection from run()")
-                    self.addNewConnection(node: node)
-                    
-                } while self.continueRunning
-                
-            }
-            catch let error {
-                guard let socketError = error as? Socket.Error else {
-                    print("run Unexpected error...")
-                    return
-                }
-                
-                if self.continueRunning {
-                    
-                    print("run Error reported:\n \(socketError.description)")
-                    
-                }
-            }
+            // Set the handlers that are applied to the accepted Channels
+            .childChannelInitializer { channel in
+                // Add handler that will buffer data until a \n is received
+                channel.pipeline.addHandler(serverInboundHandler)
         }
-    }
+            // Enable SO_REUSEADDR for the accepted Channels
+            .childChannelOption(ChannelOptions.connectTimeout, value: TimeAmount.seconds(1))
+            .childChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 16)
+            .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
         
+        do {
+            NodeManager.serverChannel = try { () -> Channel in
+                return try bootstrap.bind(host: "::1", port: listeningPort).wait()
+                }()
+        }
+        catch let error {
+            // is error reported on connection close ?
+            print("Error binding to listening channel:\n \(error.localizedDescription)")
+        }
+        
+        guard let serverChannel = NodeManager.serverChannel,
+            let localAddress = serverChannel.localAddress else {
+                fatalError("Address was unable to bind. Please check that the socket was not closed or that the address family was understood.")
+        }
+        print("Server started and listening on \(localAddress)")
+    }
+
     public func connectToOutboundNodes() {
         for node in nodes {
             if node.connectionType == .outBound {
-                connectToNode(node: node)
+                node.nodeDelegate = self
+                node.connect()
             }
         }
     }
     
     // MARK: - Private
     
-    private func connectToNode(node: Node) {
-        do {
-            var family = Socket.ProtocolFamily.inet
-            if node.address.contains(":") { family = Socket.ProtocolFamily.inet6 }
-            print("Socket.ProtocolFamily = \(family)")
-            let newNodeSocket = try Socket.create(family: family)
-            // What buffer size shall we use ?
-//            newNodeSocket.readBufferSize = 32768
-            try newNodeSocket.connect(to: node.address, port: Int32(node.port), timeout: 10000)
-//            try newNodeSocket.connect(to: node.address, port: Int32(node.port), timeout: 0)
-            
-
-            // Set how long we'll wait with no received
-            // data before we Ping the remote node
-//            try newNodeSocket.setReadTimeout(value: UInt(Constants.pingDuration))
-            try newNodeSocket.setBlocking(mode: true)
-            
-//            let node = Node(address: newNodeSocket.remoteHostname, port: UInt16(newNodeSocket.remotePort))
-//            node.address = newNodeSocket.remoteHostname
-//            node.port = UInt16(newNodeSocket.remotePort)
-            node.connectionType = .outBound
-            node.socket = newNodeSocket
-//            nodes.append(node)
-            print("calling addNewConnection from connectToNode()")
-            addNewConnection(node: node)
-        }
-        catch let error {
-            guard let socketError = error as? Socket.Error else {
-                print("connectToNode Unexpected error...")
-                return
-            }
-            // is error reported on connection close ?
-            print("connectToNode Error reported:\n \(socketError.description)")
-        }
-    }
-
-    
-    // MARK: - Messages
-
-    private func sendVersionMessage(_ node: Node) {
-        node.sentCommand = .version
-        node.sentNetworkUpdateType = .sentVersion
-        node.sentVersion = true
-        
-        let version = VersionMessage(version: protocolVersion,
-                                     services: 0x425, // (1061)
-            //services: 0x125, // (293) SFNodeNetwork|SFNodeBloom|SFNodeBitcoinCash|SFNodeCF == 37 1 0 0 0 0 0 0
-                                     timestamp: Int64(Date().timeIntervalSince1970),
-                                     receivingAddress: NetworkAddress(services: 0x00,
-                                                              address: "::ffff:\(node.address)",
-                                                              port: UInt16(node.port)),
-                                     emittingAddress: nil,
-                                     nonce: 16009251466998072645,
-                                     userAgent: yourUserAgent,
-                                     startHeight: 621193,//0,//-1,
-                                     relay: true)
-        
-        let payload = version.serialize()
-        
-        let message = Message(command: .version, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
-        networkService.sendMessage(node.socket, message)
-    }
-    
-    private func receiveVersionMessage(_ node: Node, dataByteArray: [UInt8], arrayLength: UInt32) {
-        guard let versonMessage = VersionMessage.deserialise(dataByteArray, arrayLength: arrayLength) else { return }
-        node.version = versonMessage.version
-        node.theirUserAgent = versonMessage.userAgent
-        node.emittingAddress = versonMessage.receivingAddress
-        node.services = versonMessage.services
-        node.startHeight = versonMessage.startHeight
-        node.relay = versonMessage.relay
-        
-        node.receivedNetworkUpdateType = .receivedVersion
-        node.receivedVersion = true
-        
-        if node.sentVerack == false {
-            sendVerackMessage(node)
-        }
-    }
-
-    private func receiveVerackMessage(_ node: Node) {
-        node.receivedVerack = true
-        node.receivedNetworkUpdateType = .receivedVerack
-
-        node.receivedVerack = true
-    }
-
-    private func sendVerackMessage(_ node: Node) {
-        node.sentCommand = .verack
-        node.sentNetworkUpdateType = .sentVerack
-        node.sentVerack = true
-        
-        let verackMessage = VerackMessage()
-        let payload = verackMessage.serialize()
-        let message = Message(command: .verack, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
-        networkService.sendMessage(node.socket, message)
-    }
-
-    private func sendPingMessage(_ node: Node) {
-        node.sentCommand = .ping
-        node.sentNetworkUpdateType = .sentPing
-        node.sentPing = true
-        node.receivedPong = false
-        node.lastPingReceivedTimeInterval = NSDate().timeIntervalSince1970
-        node.myPingNonce = generateNonce()
-        
-        let pingMessage = PingMessage(nonce: node.myPingNonce)
-        let payload = pingMessage.serialize()
-        let message = Message(command: .ping, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
-        networkService.sendMessage(node.socket, message)
-    }
-    
-    private func receivePongMessage(_ node: Node, dataByteArray: [UInt8]) -> (expectedNonce: UInt64, receivedNonce: UInt64) {
-        node.receivedNetworkUpdateType = .receivedPong
-        node.receivedPong = true
-
-        // Compare Nonce with the one we sent
-        // Only if this remote node uses Nonces with Ping/Pong
-        let pongMessage = PongMessage.deserialise(dataByteArray)
-        if let mine = node.myPingNonce,
-            let theirs = pongMessage.nonce {
-            return (expectedNonce: mine, receivedNonce: theirs)
-        }
-        return (0, 1)
-    }
-
-    private func receivePingMessage(_ node: Node, dataByteArray: [UInt8]) {
-        node.receivedNetworkUpdateType = .receivedPing
-        node.receivedPing = true
-        
-        let pingMessage = PingMessage.deserialise(dataByteArray)
-        node.theirNodePingNonce = pingMessage.nonce
-        
-        sendPongMessage(node)
-    }
-
-    private func sendPongMessage(_ node: Node) {
-        node.sentCommand = .pong
-        node.sentPong = true
-        node.sentNetworkUpdateType = .sentPong
-
-        let pongMessage = PongMessage(nonce: node.theirNodePingNonce)
-        let payload = pongMessage.serialize()
-        let message = Message(command: .pong, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
-        networkService.sendMessage(node.socket, message)
-    }
-    
-    // MARK: -
-
-    func addNewConnection(node: Node) {
-        print("addNewConnection \(node.address):\(node.port)")
-        guard let socket = node.socket else {
-            print("addNewConnection: No socket for this node \(node.address):\(node.port)")
-            return
-        }
-        
-        // Add the new socket to the list of connected sockets...
-        socketLockQueue.sync { [unowned self, socket] in
-            self.connectedSockets[socket.socketfd] = socket
-        }
-        
-        // Get the global concurrent queue...
-        let queue = DispatchQueue.global(qos: .default)
-        
-        // Create the run loop work item and dispatch to the default priority global queue...
-        queue.async { [unowned self, socket] in
-            
-            var shouldKeepRunning = true
-//            var readData = Data(capacity: ConnectionsManager.bufferSize)
-            
-            do {
-                var randomDuration = Double.random(in: 20 ... 40)
-                print("randomDuration = \(randomDuration)")
-                
-                repeat {
-
-                    // MARK: - <<<< Message pump
-                    
-                    // If we've never sent Version message, send it now
-                    if node.sentVersion == false {
-                        self.sendVersionMessage(node)
-                        continue
-                    }
-                    
-                    // Send a Ping message periodically
-                    // to check whether the remote node is still around
-                    let elapsedTime = (NSDate().timeIntervalSince1970 - node.lastPingReceivedTimeInterval)
-                    // If we've already sent a ping and haven't received a pong,
-                    // then disconnect from this node
-                    if node.receivedVerack == true
-                        && elapsedTime > (randomDuration)
-                        && node.sentPing == true
-                        && node.receivedPong == false {
-                        print("sent Ping but did not receive Pong")
-                        shouldKeepRunning = false
-                        break
-                    }
-                    
-                    if node.receivedVerack == true
-                        && elapsedTime > (randomDuration) {
-                        randomDuration = Double.random(in: 20 ... 40)
-                        print("randomDuration = \(randomDuration)")
-                        self.sendPingMessage(node)
-                    }
-                    
-                    // MARK: - Read Data
-                    
-                    // Read incoming data
-                    // We're looking for Messages and Payloads
-                    // Once we have both, then the data is consumed
-                    
-                    // Some messages do not require a payload i.e. verack
-//                    var bytesRead = try socket.read(into: &readData)
-
-                    // https://github.com/IBM-Swift/BlueSocket/issues/117
-                    var readData = Data(capacity: ConnectionsManager.bufferSize)
-                    while try socket.isReadableOrWritable().readable {
-                        let bytesRead = try socket.read(into: &readData)
-                        if bytesRead == 0
-                            && socket.remoteConnectionClosed == true {
-                            shouldKeepRunning = false
-                            break
-                        }
-                        if bytesRead > 0 {
-                            node.packageData.append(readData)
-                        }
-                        readData.count = 0
-                    }
-                    // MARK: - Message Check
-                    if let message = self.networkService.consumeNetworkPackets(node) {
-                        let payloadByteArray = Array([UInt8](message.payload))
-                        let payloadArrayLength = message.payload.count
-                        node.receivedCommand = message.command
-                        switch message.command {
-                        case .unknown:
-                            // Need to set this node as bad
-                            break
-                        case .version:
-                            self.receiveVersionMessage(node, dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
-                        case .verack:
-                            self.receiveVerackMessage(node)
-                        case .ping:
-                            self.receivePingMessage(node, dataByteArray: payloadByteArray)
-                        case .pong:
-                            let (expectedNonce, receivedNonce) = self.receivePongMessage(node, dataByteArray: payloadByteArray)
-                            if expectedNonce != receivedNonce {
-                                // Nonces do not match
-                                // Need to set this node as bad
-                            } else {
-                            }
-                            
-                        case .addr:
-                            break
-                        case .inv:
-                            break
-                        case .getheaders:
-                            break
-                        case .sendheaders:
-                            break
-                        case .sendcmpct:
-                            break
-                        }
-                    }
-                    // MARK: - >>>> Message pump
-                } while shouldKeepRunning
-
-                print("closing socket \(socket.remoteHostname):\(socket.remotePort)...")
-                socket.close()
-                self.socketLockQueue.sync { [unowned self, socket] in
-                    self.connectedSockets[socket.socketfd] = nil
-                    self.nodes.removeAll { (thisNode) -> Bool in
-                        return thisNode.address == node.address
-                            && thisNode.port == node.port
-                    }
-                }
-            }
-            catch let error {
-                guard let socketError = error as? Socket.Error else {
-                    print("addNewConnection Unexpected error by connection at \(socket.remoteHostname):\(socket.remotePort)...")
-                    return
-                }
-                if self.continueRunning {
-                    print("addNewConnection Error reported by connection at \(socket.remoteHostname):\(socket.remotePort):\n \(socketError.description)")
-                }
-            }
-        }
-    }
-    
     func shutdownServer() {
         print("shuttingDown...")
         self.continueRunning = false
         
-        // Close all open sockets...
-        for socket in connectedSockets.values {
-            self.socketLockQueue.sync { [unowned self, socket] in
-                self.connectedSockets[socket.socketfd] = nil
-                socket.close()
-            }
+        for node in nodes {
+            node.disconnect()
         }
+        try? NodeManager.eventLoopGroup.syncShutdownGracefully()
+        _ = NodeManager.serverChannel?.closeFuture
         print("shutdown")
     }
-    
-    // MARK: -
-
 }
 
 // MARK: -
@@ -495,4 +389,5 @@ extension Data {
             else { return [UInt8]() }
         return digest2
     }
+    
 }

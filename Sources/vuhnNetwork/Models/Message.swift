@@ -40,7 +40,8 @@ public struct FourCC: Codable {
 
     public enum Command: String, Codable {
         case unknown, version, verack, ping, pong
-        case addr, inv, getheaders, sendheaders, sendcmpct
+        case getaddr, addr, inv, getheaders, sendheaders, sendcmpct
+        case feefilter, protoconf, xversion, xverack
         
         // Command string is a maximum 12 characters long
         // Needs to pad with 0x00, not " "
@@ -98,13 +99,16 @@ public struct Message: Codable {
         let fourBytes = Array(uint8Array[offset..<(offset + size)])
         let fourCC = FourCC(characterCode: fourBytes, command: .unknown)
         
-        guard fourCC.characterCode == [0xe3, 0xe1, 0xf3, 0xe8] else { return nil }
+        guard fourCC.characterCode == [0xe3, 0xe1, 0xf3, 0xe8] else {
+            return nil
+        }
         
         offset += size
         size = MemoryLayout<UInt8>.size * 12
         var commandType: FourCC.Command? = FourCC.Command.unknown
         let commandArray = uint8Array[offset..<(offset + size)].filter { $0 != 0 }
         if let commandString = String(bytes: commandArray, encoding: .utf8) {
+            // print("\(commandString)")
             commandType = FourCC.Command(rawValue: commandString)
             if commandType == nil {
                 commandType = .unknown
@@ -117,20 +121,27 @@ public struct Message: Codable {
             return soFar << 8 | UInt32(byte)
         }
         
+        if arrayLength < length {
+            return nil
+        }
+        
         offset += size
         size = MemoryLayout<UInt8>.size * 4
         let checksum = Array(uint8Array[offset..<(offset + size)])
         
-        if arrayLength <= 24 {
+        if length == 0 {
             return Message(fourCC: fourCC, command: commandType ?? .unknown, length: UInt32(length), checksum: Data(checksum), payload: Data())
         }
 
         var payload = Data()
-        if (offset + size) < arrayLength {
-            offset += size
+        offset += size
+        if length > 0
+            && (UInt32(offset) + length) <= arrayLength {
             size = Int(length)
             let payloadArray = Array(uint8Array[offset..<(offset + size)])
             payload = Data(payloadArray)
+        } else {
+            return nil
         }
         
         // Confirm checksum is correct
@@ -139,7 +150,10 @@ public struct Message: Codable {
         for (index, element) in checksumFromPayload.enumerated() {
             if checksum[index] != element { checksumConfirmed = false; break }
         }
-        if checksumConfirmed == false { return nil }
+
+        if checksumConfirmed == false {
+            return nil
+        }
 
         let newMessage = Message(fourCC: fourCC, command: commandType ?? .unknown, length: UInt32(length), checksum: Data(checksum), payload: payload)
         return newMessage
