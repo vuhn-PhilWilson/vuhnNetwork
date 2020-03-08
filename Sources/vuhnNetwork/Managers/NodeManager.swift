@@ -104,7 +104,13 @@ final class ServerInboundHandler: ChannelInboundHandler {
     }
 }
 
+public protocol NodeManagerDelegate {
+    func addressesUpdated(for nodes: [Node])
+}
+
 public class NodeManager: NodeDelegate {
+    
+    public var nodeManagerDelegate: NodeManagerDelegate? = nil
     
     // MARK: - NodeDelegate
 
@@ -116,18 +122,24 @@ public class NodeManager: NodeDelegate {
             let address = "0000:0000:0000:0000:0000:ffff:" + node.emittingAddress.address
             networkAddress = NetworkAddress(services: node.emittingAddress.services, address: address, port: node.emittingAddress.port)
             node.emittingAddress = networkAddress
-            print("🥝  updated node.emittingAddress \(node.emittingAddress)")
+            node.address = node.emittingAddress.address
         }
-        let timestamp = NSDate().timeIntervalSince1970
         if !networkAddresses.contains(where: { (arg0) -> Bool in
             let (_, networkAddressToCheck) = arg0
             return networkAddressToCheck.address == networkAddress.address
                 && networkAddressToCheck.port == networkAddress.port
         }) {
-            networkAddresses.append((timestamp, networkAddress))
-//            print("networkAddresses array added \(networkAddress.address):\(networkAddress.port)       count = \(networkAddresses.count)")
+            networkAddresses.append((TimeInterval(node.lastSuccess), node))
         } else {
-//            print("networkAddresses array already contains \(networkAddress.address):\(networkAddress.port)       count = \(networkAddresses.count)")
+            // Update last connection success timestamp
+            if let index = networkAddresses.firstIndex(where: { (arg0) -> Bool in
+                let (_, networkAddressToCheck) = arg0
+                return networkAddressToCheck.address == networkAddress.address
+                    && networkAddressToCheck.port == networkAddress.port
+            }) {
+                let (_, networkAddressToCheck) = networkAddresses[index]
+                networkAddresses[index] = (TimeInterval(node.lastSuccess), networkAddressToCheck)
+            }
         }
     }
 
@@ -137,7 +149,7 @@ public class NodeManager: NodeDelegate {
         })
     }
 
-    public func didReceiveNetworkAddresses(_ node: Node, _ addresses: [(TimeInterval, NetworkAddress)]) {
+    public func didReceiveNetworkAddresses(_ sourceNode: Node, _ addresses: [(TimeInterval, NetworkAddress)]) {
 
         DispatchQueue.main.async {
             var additionsCount = 0
@@ -146,21 +158,26 @@ public class NodeManager: NodeDelegate {
                 if !self.networkAddresses.contains(where: { (arg0) -> Bool in
                     let (_, networkAddressToCheck) = arg0
                     return networkAddressToCheck.address == networkAddress.address
-//                        && networkAddressToCheck.port == networkAddress.port
                 }) {
-                    self.networkAddresses.append((timestamp, networkAddress))
+                    
+                    
+                    let newNode = Node(address: networkAddress.address, port: networkAddress.port)
+                    newNode.services = networkAddress.services
+                    newNode.attemptsToConnect = 0
+                    newNode.lastAttempt = 0
+                    newNode.lastSuccess = 0
+                    newNode.src = sourceNode.name
+                    newNode.srcServices = sourceNode.services
+                    self.networkAddresses.append((timestamp, newNode))
                     additionsCount += 1
-//                    print("networkAddresses array added \(networkAddress.address):\(networkAddress.port)       count = \(self.networkAddresses.count)")
-                } else {
-//                    print("networkAddresses array already contains \(networkAddress.address):\(networkAddress.port)       count = \(self.networkAddresses.count)")
                 }
             }
             print("Added \(additionsCount) to networkAddresses")
-            let alladdresses = self.networkAddresses.map {
-                $0.1
+            let allNodes = self.networkAddresses.map { (arg) -> Node in
+                let (_, node) = arg
+                return node
             }
-            let addressesSet: Set<NetworkAddress> = Set(alladdresses)
-            print("addressesSet unique count \(addressesSet.count)")
+            self.nodeManagerDelegate?.addressesUpdated(for: allNodes)
         }
     }
     
@@ -182,7 +199,7 @@ public class NodeManager: NodeDelegate {
     // MARK: - Private Properties
     
     
-    public var networkAddresses = [(TimeInterval, NetworkAddress)]()
+    public var networkAddresses = [(TimeInterval, Node)]()
     
     static let bufferSize = 4096
     
@@ -207,7 +224,9 @@ public class NodeManager: NodeDelegate {
     
     // MARK: - Public
     
-    public init() { }
+    public init(nodeManagerDelegate: NodeManagerDelegate? = nil) {
+        self.nodeManagerDelegate = nodeManagerDelegate
+    }
         
     deinit {
         close()

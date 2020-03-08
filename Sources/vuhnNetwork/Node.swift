@@ -310,8 +310,9 @@ public class Node: NSObject {
         self.randomDuration = Double.random(in: 10 ... 40)
         self.connectionFirstMadeTimeInterval = NSDate().timeIntervalSince1970
         self.getAddrRandomDuration = Double.random(in: 10 ... 40)
+        self.attemptsToConnect = 0
+        
         super.init()
-        print("\(name) randomDuration = \(randomDuration)")
     }
     
     public func serializeForDisk() -> Data {
@@ -508,6 +509,10 @@ public class Node: NSObject {
 
     public func connectUsingNIO() -> Bool {
         
+        let timestamp = NSDate().timeIntervalSince1970
+        lastAttempt = UInt64(timestamp)
+        attemptsToConnect += 1
+        
         let nodeInboundHandler = NodeInboundHandler(with: self)
         let bootstrap = ClientBootstrap(group: NodeManager.eventLoopGroup)
             .connectTimeout(TimeAmount.seconds(5))
@@ -528,12 +533,11 @@ public class Node: NSObject {
         }
         if let outputChannel = outputChannel {
             print("This Client connected to Remote Server: \(outputChannel.remoteAddress!)\n. Press ^C to exit.")
-
+            lastSuccess = UInt64(timestamp)
             connectionFirstMadeTimeInterval = NSDate().timeIntervalSince1970
             if sentVersion == false {
                 sendVersionMessage()
             }
-            
             return true
         }
         return false

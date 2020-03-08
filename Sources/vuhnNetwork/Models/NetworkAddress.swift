@@ -70,7 +70,9 @@ public struct NetworkAddress {
     }
     
     static public func isIPv4(_ address: String) -> Bool {
-        return address.split(separator: ".").count == 4
+        if address.split(separator: ".").count == 4
+            && (address.split(separator: ":").count == 1 || address.split(separator: ":").count == 2) { return true }
+        return false
     }
     
     static public func extractAddress(_ address: String, andPort port: UInt16 = 8333) -> (address: String, port: UInt16) {
