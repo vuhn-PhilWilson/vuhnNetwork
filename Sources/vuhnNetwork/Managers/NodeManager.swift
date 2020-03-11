@@ -113,8 +113,8 @@ public class NodeManager: NodeDelegate {
     public var nodeManagerDelegate: NodeManagerDelegate? = nil
     
     // MARK: - NodeDelegate
-
-    public func didConnectNode(_ node: Node) {
+    
+    private func indexForNode(_ node: Node) -> Int {
         // serialize/ deserialize to have v4 addresses prepended with
         // "0000:0000:0000:0000:0000:ffff"
         var networkAddress = node.emittingAddress
@@ -129,7 +129,8 @@ public class NodeManager: NodeDelegate {
             return networkAddressToCheck.address == networkAddress.address
                 && networkAddressToCheck.port == networkAddress.port
         }) {
-            networkAddresses.append((TimeInterval(node.lastSuccess), node))
+            networkAddresses.append((TimeInterval(node.lastAttempt), node))
+            return networkAddresses.count - 1
         } else {
             // Update last connection success timestamp
             if let index = networkAddresses.firstIndex(where: { (arg0) -> Bool in
@@ -138,9 +139,26 @@ public class NodeManager: NodeDelegate {
                     && networkAddressToCheck.port == networkAddress.port
             }) {
                 let (_, networkAddressToCheck) = networkAddresses[index]
-                networkAddresses[index] = (TimeInterval(node.lastSuccess), networkAddressToCheck)
+                networkAddresses[index] = (TimeInterval(node.lastAttempt), networkAddressToCheck)
+                return index
             }
         }
+        return -1
+    }
+    
+    private func updateStoredNodeData() {
+        let allNodes = self.networkAddresses.map { (arg) -> Node in
+            let (_, node) = arg
+            return node
+        }
+        self.nodeManagerDelegate?.addressesUpdated(for: allNodes)
+    }
+
+    public func didConnectNode(_ node: Node) {
+        let index = indexForNode(node)
+        let (_, networkAddressToUpdate) = networkAddresses[index]
+        networkAddresses[index] = (TimeInterval(node.lastSuccess), networkAddressToUpdate)
+        updateStoredNodeData()
     }
 
     public func didDisconnectNode(_ node: Node) {
@@ -148,6 +166,27 @@ public class NodeManager: NodeDelegate {
             nodeToCheck.name == node.name
         })
     }
+    
+    public func didFailToConnectNode(_ node: Node) {
+        updateNodeForLastAttempt(node)
+    }
+    
+    public func didFailToReceivePongForNode(_ node: Node) {
+        updateNodeForLastAttempt(node)
+    }
+    
+    public func didFailToReceiveGetAddrForNode(_ node: Node) {
+        updateNodeForLastAttempt(node)
+    }
+    
+    private func updateNodeForLastAttempt(_ node: Node) {
+        let index = indexForNode(node)
+        let (_, networkAddressToUpdate) = networkAddresses[index]
+        networkAddresses[index] = (TimeInterval(node.lastAttempt), networkAddressToUpdate)
+        updateStoredNodeData()
+    }
+    
+    // MARK: -
 
     public func didReceiveNetworkAddresses(_ sourceNode: Node, _ addresses: [(TimeInterval, NetworkAddress)]) {
 
@@ -296,8 +335,24 @@ public class NodeManager: NodeDelegate {
         }
     }
     
+    public func configure(with listOfNodes: [Node], and listeningPort: Int = -1) {
+        self.listeningPort = listeningPort
+        self.nodes.removeAll()
+//        self.nodes.append(contentsOf: nodes)
+        for node in listOfNodes {
+            node.connectionType = .outBound
+            node.nodeDelegate = self
+            self.nodes.append(node)
+        }
+    }
+    
     public func startListening() {
         print("System core count \(System.coreCount)")
+        print("listeningPort \(listeningPort)")
+        if listeningPort == -1 {
+            print("No listening port set")
+            return
+        }
         
         let serverInboundHandler = ServerInboundHandler(with: self)
         let bootstrap = ServerBootstrap(group: NodeManager.eventLoopGroup)

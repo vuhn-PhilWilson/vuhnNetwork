@@ -19,6 +19,9 @@ import NIO
 
 public protocol NodeDelegate {
     func didConnectNode(_ node: Node)
+    func didFailToConnectNode(_ node: Node)
+    func didFailToReceivePongForNode(_ node: Node)
+    func didFailToReceiveGetAddrForNode(_ node: Node)
     func didDisconnectNode(_ node: Node)
     
     func didReceiveNetworkAddresses(_ node: Node, _ addresses: [(TimeInterval, NetworkAddress)])
@@ -94,6 +97,7 @@ public class Node: NSObject {
         print("Outgoing NIO connection")
         if !connectUsingNIO() {
             print("Failed to connect to \(name) \(connectionType)")
+            nodeDelegate?.didFailToConnectNode(self)
             return
         }
         print("Connected to \(name) \(connectionType)")
@@ -116,6 +120,8 @@ public class Node: NSObject {
             && receivedGetAddrResponse == false {
             print("\(name) sent GetAddr but did not receive Addr")
             shouldKeepRunning = false
+            failedToReceiveGetAddrResponse += 1
+            nodeDelegate?.didFailToReceiveGetAddrForNode(self)
             disconnect()
             return
         }
@@ -136,6 +142,8 @@ public class Node: NSObject {
             && receivedPong == false {
             print("\(name) sent Ping but did not receive Pong")
             shouldKeepRunning = false
+            failedToReceivePong += 1
+            nodeDelegate?.didFailToReceivePongForNode(self)
             disconnect()
             return
         }
@@ -289,8 +297,13 @@ public class Node: NSObject {
     public var latency: UInt32 = UInt32.max
     public var src: String?
     public var srcServices: UInt64?
+    public var failedToConnect: UInt32 = 0
+    public var failedToReceivePong: UInt32 = 0
+    public var failedToReceiveGetAddrResponse: UInt32 = 0
     
     public var nodeDelegate: NodeDelegate?
+    
+    // MARK: -
     
     public init(address: String, port: UInt16 = 8333, nodeDelegate: NodeDelegate? = nil) {
         self.nodeDelegate = nodeDelegate
@@ -326,7 +339,11 @@ public class Node: NSObject {
         data += "\(services),".data(using: .utf8) ?? Data()
         data += "\(src ?? "unknown"),".data(using: .utf8) ?? Data()
         data += "\(srcServices ?? 0),".data(using: .utf8) ?? Data()
-        data += "\(UInt64(Date().timeIntervalSince1970))\n".data(using: .utf8) ?? Data()
+        data += "\(UInt64(Date().timeIntervalSince1970)),".data(using: .utf8) ?? Data()
+        data += "\(failedToConnect),".data(using: .utf8) ?? Data()
+        data += "\(failedToReceivePong),".data(using: .utf8) ?? Data()
+        data += "\(failedToReceiveGetAddrResponse)\n".data(using: .utf8) ?? Data()
+        
         return data
     }
     
@@ -515,7 +532,7 @@ public class Node: NSObject {
         
         let nodeInboundHandler = NodeInboundHandler(with: self)
         let bootstrap = ClientBootstrap(group: NodeManager.eventLoopGroup)
-            .connectTimeout(TimeAmount.seconds(5))
+            .connectTimeout(TimeAmount.seconds(1))
             .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
             .channelInitializer { channel in
             channel.pipeline.addHandler(nodeInboundHandler)
@@ -529,6 +546,7 @@ public class Node: NSObject {
         catch let error {
             // is error reported on connection close ?
             print("Error connecting to output channel:\n \(error.localizedDescription)")
+            failedToConnect += 1
             return false
         }
         if let outputChannel = outputChannel {
@@ -540,6 +558,7 @@ public class Node: NSObject {
             }
             return true
         }
+        failedToConnect += 1
         return false
     }
     
