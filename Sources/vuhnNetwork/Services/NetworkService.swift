@@ -36,7 +36,7 @@ class NetworkService {
             
             if message.payload.count < message.length {
                 // We received the Message data but not the payload
-                print("\(node.name) We received the Message data but not the payload. \(message.command)  message.payload.count \(message.payload.count) message.length \(message.length)")
+                print("\(node.nameShortened) We received the Message data but not the payload. \(message.command)  message.payload.count \(message.payload.count) message.length \(message.length)")
                 return nil
             }
             let payload = message.payload
@@ -44,7 +44,7 @@ class NetworkService {
             
             // Confirm magic number is correct
             if message.fourCC.characterCode != [0xe3, 0xe1, 0xf3, 0xe8] {
-                print("\(node.name) fourCC != 0xe3e1f3e8\nfourCC == \(message.fourCC)\nfor node with address \(node.address):\(node.port)")
+                print("\(node.nameShortened) fourCC != 0xe3e1f3e8\nfourCC == \(message.fourCC)\nfor node with address \(node.address):\(node.port)")
                 return nil
             }
             
@@ -58,7 +58,7 @@ class NetworkService {
                     if message.checksum[index] != element { checksumConfirmed = false; break }
                 }
                 if checksumConfirmed != true { return nil }
-                print("\(node.name) received \(message.command)")
+//                print("\(node.nameShortened) received \(message.command)")
             } else {
                 // Still more data to retrive for this message
                 return nil

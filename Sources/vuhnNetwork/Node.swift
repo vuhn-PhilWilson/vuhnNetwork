@@ -20,6 +20,7 @@ import NIO
 public protocol NodeDelegate {
     func didConnectNode(_ node: Node)
     func didFailToConnectNode(_ node: Node)
+    func didFailToReceiveVerAckForNode(_ node: Node)
     func didFailToReceivePongForNode(_ node: Node)
     func didFailToReceiveGetAddrForNode(_ node: Node)
     func didDisconnectNode(_ node: Node)
@@ -94,7 +95,7 @@ public class Node: NSObject {
     // MARK: -
     
     public func connect() {
-        print("Outgoing NIO connection")
+        print("Outgoing NIO connection to \(name)")
         if !connectUsingNIO() {
             print("Failed to connect to \(name) \(connectionType)")
             nodeDelegate?.didFailToConnectNode(self)
@@ -105,7 +106,7 @@ public class Node: NSObject {
     }
     
     public func disconnect() {
-        print("\(name) \(connectionType) disconnected")
+        print("\(nameShortened) \(connectionType) disconnected")
         shutDownPingTimer()
         shutDownGetAddrTimer()
         _ = self.inputChannel?.close()
@@ -113,16 +114,50 @@ public class Node: NSObject {
         nodeDelegate?.didDisconnectNode(self)
     }
     
+    private func checkForGetHeaders() {
+        print("\(nameShortened) checkForGetHeaders")
+        
+        // Send GetHeaders message
+        if receivedVerack == true
+            && sentGetHeaders == true
+            && receivedGetHeadersResponse == false {
+            print("\(nameShortened) sent GetHeaders but did not receive Headers")
+            return
+        }
+        
+        if receivedVerack == true
+            && sentGetHeaders == false
+            && receivedGetHeadersResponse == false {
+            sendGetHeadersMessage()
+        }
+    }
+    
+    private func checkForVerAck() {
+
+        // If we've already sent a Version and haven't received a VerAck,
+        // then disconnect from this node
+        if receivedVerack == false
+            && sentVersion == true {
+            print("\(nameShortened) sent Version but did not receive VerAck")
+            shouldKeepRunning = false
+            failedToReceiveVerAck += 1
+            nodeDelegate?.didFailToReceiveVerAckForNode(self)
+            disconnect()
+            return
+        }
+//        print("Received VerAck message from \(name) in time")
+    }
+    
     private func checkForGetAddr() {
 
         if receivedVerack == true
             && sentGetAddr == true
             && receivedGetAddrResponse == false {
-            print("\(name) sent GetAddr but did not receive Addr")
-            shouldKeepRunning = false
+            print("\(nameShortened) sent GetAddr but did not receive Addr")
+//            shouldKeepRunning = false
             failedToReceiveGetAddrResponse += 1
             nodeDelegate?.didFailToReceiveGetAddrForNode(self)
-            disconnect()
+//            disconnect()
             return
         }
         
@@ -140,11 +175,13 @@ public class Node: NSObject {
         if receivedVerack == true
             && sentPing == true
             && receivedPong == false {
-            print("\(name) sent Ping but did not receive Pong")
+            print("\(nameShortened) sent Ping but did not receive Pong")
             shouldKeepRunning = false
             failedToReceivePong += 1
             nodeDelegate?.didFailToReceivePongForNode(self)
-            disconnect()
+            if failedToReceivePong > 3 {
+                disconnect()
+            }
             return
         }
         
@@ -169,7 +206,7 @@ public class Node: NSObject {
             switch message.command {
             case .unknown:
                 // Need to set this node as bad
-                print("\(name) payload length:\(payloadArrayLength) data:\(payloadByteArray)")
+                print("\(nameShortened) <unknown> payload length:\(payloadArrayLength) data:\(payloadByteArray)")
                 
                 break
             case .version:
@@ -199,8 +236,12 @@ public class Node: NSObject {
             case .inv:
                 break
             case .getheaders:
+                print("\(nameShortened) <getheaders> payload length:\(payloadArrayLength) data:\(payloadByteArray)")
                 break
             case .sendheaders:
+                break
+            case .headers:
+            print("\(nameShortened) <headers> payload length:\(payloadArrayLength) data:\(payloadByteArray)")
                 break
             case .sendcmpct:
                 break
@@ -209,6 +250,7 @@ public class Node: NSObject {
             case .protoconf:
                 break
             case .xversion:
+                self.receiveXVersionMessage(self, dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
                 break
             case .xverack:
                 break
@@ -236,6 +278,15 @@ public class Node: NSObject {
     var sentGetAddr = false
     var receivedAddr = false
     
+    var receivedXVersion = false
+    var sentXVerack = false
+    var sentXVersion = false
+    var receivedXVerack = false
+    
+    var sentGetHeaders = false
+    var receivedHeaders = false
+    var receivedGetHeadersResponse = false
+    
     var lastPingReceivedTimeInterval: TimeInterval
     
     public var packetData: Data
@@ -262,6 +313,9 @@ public class Node: NSObject {
     var getAddrRandomDuration = Double.random(in: 10 ... 40)
     var connectionFirstMadeTimeInterval: TimeInterval
     private var getAddrTimer : DispatchSourceTimer?
+    
+    private var getHeadersTimer : DispatchSourceTimer?
+    
 
     
     /// User Agent (0x00 if string is 0 bytes long)
@@ -290,6 +344,28 @@ public class Node: NSObject {
         }
     }
     
+    public var nameShortened: String {
+        get {
+            let prefix = "0000:0000:0000:0000:0000:ffff:"
+            var shortenedAddress = address
+            if address.contains(prefix) {
+                shortenedAddress.removeFirst(prefix.count)
+            }
+            return "\(shortenedAddress):\(port)"
+        }
+    }
+    
+    public var addressShortened: String {
+        get {
+            let prefix = "0000:0000:0000:0000:0000:ffff:"
+            var shortenedAddress = address
+            if address.contains(prefix) {
+                shortenedAddress.removeFirst(prefix.count)
+            }
+            return "\(shortenedAddress)"
+        }
+    }
+    
     public var attemptsToConnect: UInt32 = 0
     public var lastAttempt: UInt64 = 0
     public var lastSuccess: UInt64 = 0
@@ -298,6 +374,7 @@ public class Node: NSObject {
     public var src: String?
     public var srcServices: UInt64?
     public var failedToConnect: UInt32 = 0
+    public var failedToReceiveVerAck: UInt32 = 0
     public var failedToReceivePong: UInt32 = 0
     public var failedToReceiveGetAddrResponse: UInt32 = 0
     
@@ -330,7 +407,7 @@ public class Node: NSObject {
     
     public func serializeForDisk() -> Data {
         var data = Data()
-        data += "\(name),".data(using: .utf8) ?? Data([UInt8(0x00)])
+        data += "\(nameShortened),".data(using: .utf8) ?? Data([UInt8(0x00)])
         data += "\(attemptsToConnect),".data(using: .utf8) ?? Data()
         data += "\(lastAttempt),".data(using: .utf8) ?? Data()
         data += "\(lastSuccess),".data(using: .utf8) ?? Data()
@@ -341,6 +418,7 @@ public class Node: NSObject {
         data += "\(srcServices ?? 0),".data(using: .utf8) ?? Data()
         data += "\(UInt64(Date().timeIntervalSince1970)),".data(using: .utf8) ?? Data()
         data += "\(failedToConnect),".data(using: .utf8) ?? Data()
+        data += "\(failedToReceiveVerAck),".data(using: .utf8) ?? Data()
         data += "\(failedToReceivePong),".data(using: .utf8) ?? Data()
         data += "\(failedToReceiveGetAddrResponse)\n".data(using: .utf8) ?? Data()
         
@@ -352,7 +430,7 @@ public class Node: NSObject {
     
     public func sendVersionMessage() {
         sentCommand = .version
-        print("\(name) sent \(sentCommand)")
+        print("\(nameShortened) sent \(sentCommand)")
         sentNetworkUpdateType = .sentVersion
         sentVersion = true
         
@@ -410,6 +488,8 @@ public class Node: NSObject {
         
         // Start timer for sending GetAddr and checking its associated Addr
         startGetAddrTimer()
+        
+        startGetHeadersTimer()
     }
     
     public func sendVerackMessage(_ node: Node) {
@@ -432,9 +512,45 @@ public class Node: NSObject {
 //        }
     }
     
+    public func receiveXVersionMessage(_ node: Node, dataByteArray: [UInt8], arrayLength: UInt32) {
+        print("\(nameShortened) received \(node.receivedCommand)")
+//        guard let xversonMessage = XVersionMessage.deserialise(dataByteArray, arrayLength: arrayLength) else { return }
+//        node.version = versonMessage.version
+//        node.theirUserAgent = versonMessage.userAgent
+//        node.emittingAddress = versonMessage.receivingAddress
+//        node.services = versonMessage.services
+//        node.startHeight = versonMessage.startHeight
+//        node.relay = versonMessage.relay
+//
+        node.receivedNetworkUpdateType = .receivedXVersion
+        node.receivedXVersion = true
+        
+        if node.sentXVerack == false {
+            sendXVerackMessage(node)
+        }
+    }
+
+    public func sendXVerackMessage(_ node: Node) {
+        node.sentCommand = .xverack
+        node.sentNetworkUpdateType = .sentXVerack
+        node.sentXVerack = true
+        
+        print("\(nameShortened) send XVerack Message")
+        
+        let xverackMessage = XVerackMessage()
+        let payload = xverackMessage.serialize()
+        let message = Message(command: .xverack, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
+        
+        networkService.sendMessage(
+            node.connectionType == .inBound
+                ? node.inputChannel
+                : node.outputChannel,
+            message)
+    }
+    
     public func sendPingMessage() {
         sentCommand = .ping
-        print("\(name) sent \(sentCommand)  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  ")
+//        print("\(nameShortened) sent \(sentCommand)  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  PING   >>>>>>>>>  ")
         sentNetworkUpdateType = .sentPing
         sentPing = true
         receivedPong = false
@@ -453,7 +569,7 @@ public class Node: NSObject {
     }
     
     public func receivePongMessage(dataByteArray: [UInt8]) -> (expectedNonce: UInt64, receivedNonce: UInt64) {
-        print("\(name) received \(receivedCommand)  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  ")
+//        print("\(nameShortened) received \(receivedCommand)  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  PONG   <<<<<<<<<  ")
         receivedNetworkUpdateType = .receivedPong
         receivedPong = true
         
@@ -468,7 +584,7 @@ public class Node: NSObject {
     }
     
     public func receivePingMessage(dataByteArray: [UInt8]) {
-        print("received \(receivedCommand)")
+//        print("received \(receivedCommand)")
         receivedNetworkUpdateType = .receivedPing
         receivedPing = true
         
@@ -479,7 +595,7 @@ public class Node: NSObject {
     
     public func sendPongMessage() {
         sentCommand = .pong
-        print("sent \(sentCommand)")
+//        print("sent \(sentCommand)")
         sentPong = true
         sentNetworkUpdateType = .sentPong
         
@@ -495,7 +611,7 @@ public class Node: NSObject {
 
     public func sendGetAddrMessage() {
         sentCommand = .getaddr
-        print("\(name) sent \(sentCommand)  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  ")
+//        print("\(nameShortened) sent \(sentCommand)  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  ")
         sentNetworkUpdateType = .sentGetAddr
         sentGetAddr = true
         receivedGetAddrResponse = false
@@ -517,9 +633,28 @@ public class Node: NSObject {
         }
         let addresses: [(TimeInterval, NetworkAddress)] = addrMessage.networkAddresses
         let numberOfAddresses = addresses.count
-        print("\(name): received \(numberOfAddresses) addresses")
+        print("\(nameShortened): received \(numberOfAddresses) addresses")
         
         nodeDelegate?.didReceiveNetworkAddresses(self, addresses)
+    }
+    
+    public func sendGetHeadersMessage() {
+        print("\(nameShortened) sendGetHeadersMessage")
+        sentCommand = .getheaders
+        //        print("\(nameShortened) sent \(sentCommand)  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  ")
+        sentNetworkUpdateType = .sentGetHeaders
+        sentGetHeaders = true
+        receivedGetHeadersResponse = false
+        
+        let payload = GetHeadersMessage().serialize()
+//        let payload = GetHeadersMessage(version: UInt32(version), blockLocatorHashes: [""]).serialize()
+        let message = Message(command: sentCommand, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
+        
+        networkService.sendMessage(
+            connectionType == .inBound
+                ? inputChannel
+                : outputChannel,
+            message)
     }
         
     // MARK: - NIO
@@ -555,11 +690,30 @@ public class Node: NSObject {
             connectionFirstMadeTimeInterval = NSDate().timeIntervalSince1970
             if sentVersion == false {
                 sendVersionMessage()
+                // Need to make sure we receive VerAck message from their node
+                startVerAckTimer()
             }
             return true
         }
         failedToConnect += 1
         return false
+    }
+
+    // If we haven't received a VerAck by the time this timer expires
+    // Then disconnect from their node
+    public func startVerAckTimer() {
+        let verAckTimer = DispatchSource.makeTimerSource(flags: [], queue: DispatchQueue.main)
+        
+        let deadline: DispatchTime = .now() + .seconds(10)
+        verAckTimer.schedule(deadline: deadline)
+        verAckTimer.setEventHandler
+        {
+//            print("verAckTimer fired for \(self.name)")
+            verAckTimer.cancel()
+            verAckTimer.setEventHandler {}
+            self.checkForVerAck()
+        }
+        verAckTimer.resume()
     }
     
     public func startPingTimer() {
@@ -593,15 +747,29 @@ public class Node: NSObject {
         }
         getAddrTimer?.resume()
     }
+
+    public func startGetHeadersTimer() {
+        let getHeadersTimer = DispatchSource.makeTimerSource(flags: [], queue: DispatchQueue.main)
+        
+        let deadline: DispatchTime = .now() + .seconds(Int(Double.random(in: 10 ... 40)))
+        getHeadersTimer.schedule(deadline: deadline)
+        getHeadersTimer.setEventHandler
+        {
+            getHeadersTimer.cancel()
+            getHeadersTimer.setEventHandler {}
+            self.checkForGetHeaders()
+        }
+        getHeadersTimer.resume()
+    }
     
     private func shutDownPingTimer() {
-        print("shutDown Ping Timer")
+//        print("shutDown Ping Timer")
         pingTimer?.cancel()
         pingTimer?.setEventHandler {}
     }
     
     private func shutDownGetAddrTimer() {
-        print("shutDown GetAddr Timer")
+//        print("shutDown GetAddr Timer")
         getAddrTimer?.cancel()
         getAddrTimer?.setEventHandler {}
     }

@@ -79,26 +79,59 @@ public struct NetworkAddress {
         var portString = "\(port)"
         var returnPort = port
         var returnAddress = address
-        var splitAddress = address.split(separator: ":")
-        if splitAddress.count == 1 {
-            // Address is only the address portion
-            returnAddress = address
-        } else if splitAddress.count == 2 {
-            // Address is IPV4 including port suffix
-            returnAddress = String(splitAddress[0])
-            portString = String(splitAddress[1])
-        }
-        else if splitAddress.count == 8 {
-            // Address is IPV6 without port suffix
-            returnAddress = address.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        }
-        else if splitAddress.count == 9 {
-            // Address is IPV6 with port suffix
-            portString = String(splitAddress.removeLast())
-            returnAddress = String(splitAddress.joined(separator: ":")).trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        }
-        if let portInt = UInt16(portString) {
-            returnPort = portInt
+//        var splitAddress = address.split(separator: ":")
+        let splitAddressForIPV4 = address.split(separator: ".")
+        
+        if splitAddressForIPV4.count == 4 {
+            // Is IPV4
+            // example:
+            // "0000:0000:0000:0000:0000:ffff:51.15.125.5:8333"
+            // "51.15.125.5:8333"
+            // "0000:0000:0000:0000:0000:ffff:51.15.125.5"
+            // "51.15.125.5"
+            
+            let splitAddressByColon = address.split(separator: ":")
+            if splitAddressByColon.count == 1 {
+                // IPV4 with no port suffix
+                returnAddress = "0000:0000:0000:0000:0000:ffff:\(String(splitAddressByColon[0]))"
+            } else if splitAddressByColon.count == 2 {
+                // IPV4 with port suffix
+                returnAddress = "0000:0000:0000:0000:0000:ffff:\(String(splitAddressByColon[0]))"
+                portString = String(splitAddressByColon[1])
+            } else if splitAddressByColon.count == 7 {
+                // IPV4 expanded into IPV6 with no port suffix
+                returnAddress = String(splitAddressByColon[6])
+            } else if splitAddressByColon.count == 8 {
+                // IPV4 expanded into IPV6 with port suffix
+                returnAddress = String(splitAddressByColon[6])
+                portString = String(splitAddressByColon[7])
+            }
+        } else {
+            // Is IPV6
+            var splitAddressByColon = address.split(separator: ":")
+            
+            if splitAddressByColon.count == 1 {
+                // Address is only the address portion
+                returnAddress = "0000:0000:0000:0000:0000:ffff:\(address)"
+            } else if splitAddressByColon.count == 2 {
+                // Address is IPV4 including port suffix
+                returnAddress = "0000:0000:0000:0000:0000:ffff:\(String(splitAddressByColon[0]))"
+                portString = String(splitAddressByColon[1])
+            }
+            else if splitAddressByColon.count == 8 {
+                // Address is IPV6 without port suffix
+                returnAddress = address.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            }
+            else if splitAddressByColon.count == 9 {
+                // Address is IPV6 with port suffix
+                portString = String(splitAddressByColon.removeLast())
+                returnAddress = String(splitAddressByColon.joined(separator: ":")).trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            }
+
+            if let portInt = UInt16(portString) {
+                returnPort = portInt
+            }
+            
         }
         return (returnAddress, returnPort)
     }

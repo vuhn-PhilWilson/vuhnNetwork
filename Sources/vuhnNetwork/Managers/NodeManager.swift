@@ -110,6 +110,8 @@ public protocol NodeManagerDelegate {
 
 public class NodeManager: NodeDelegate {
     
+    public static var myExternalIPAddress: String?
+    
     public var nodeManagerDelegate: NodeManagerDelegate? = nil
     
     // MARK: - NodeDelegate
@@ -119,7 +121,7 @@ public class NodeManager: NodeDelegate {
         // "0000:0000:0000:0000:0000:ffff"
         var networkAddress = node.emittingAddress
         if NetworkAddress.isIPv4(node.emittingAddress.address) {
-            let address = "0000:0000:0000:0000:0000:ffff:" + node.emittingAddress.address
+            let address = node.emittingAddress.address
             networkAddress = NetworkAddress(services: node.emittingAddress.services, address: address, port: node.emittingAddress.port)
             node.emittingAddress = networkAddress
             node.address = node.emittingAddress.address
@@ -156,6 +158,7 @@ public class NodeManager: NodeDelegate {
 
     public func didConnectNode(_ node: Node) {
         let index = indexForNode(node)
+        if index == -1 { return }
         let (_, networkAddressToUpdate) = networkAddresses[index]
         networkAddresses[index] = (TimeInterval(node.lastSuccess), networkAddressToUpdate)
         updateStoredNodeData()
@@ -169,6 +172,16 @@ public class NodeManager: NodeDelegate {
     
     public func didFailToConnectNode(_ node: Node) {
         updateNodeForLastAttempt(node)
+        nodes.removeAll(where: { (nodeToCheck) -> Bool in
+            nodeToCheck.name == node.name
+        })
+    }
+    
+    public func didFailToReceiveVerAckForNode(_ node: Node) {
+        updateNodeForLastAttempt(node)
+        nodes.removeAll(where: { (nodeToCheck) -> Bool in
+            nodeToCheck.name == node.name
+        })
     }
     
     public func didFailToReceivePongForNode(_ node: Node) {
@@ -189,7 +202,7 @@ public class NodeManager: NodeDelegate {
     // MARK: -
 
     public func didReceiveNetworkAddresses(_ sourceNode: Node, _ addresses: [(TimeInterval, NetworkAddress)]) {
-
+        if addresses.count == 0 { return }
         DispatchQueue.main.async {
             var additionsCount = 0
             for index in 0..<addresses.count {
@@ -198,8 +211,6 @@ public class NodeManager: NodeDelegate {
                     let (_, networkAddressToCheck) = arg0
                     return networkAddressToCheck.address == networkAddress.address
                 }) {
-                    
-                    
                     let newNode = Node(address: networkAddress.address, port: networkAddress.port)
                     newNode.services = networkAddress.services
                     newNode.attemptsToConnect = 0
@@ -211,7 +222,8 @@ public class NodeManager: NodeDelegate {
                     additionsCount += 1
                 }
             }
-            print("Added \(additionsCount) to networkAddresses")
+            if additionsCount == 0 { return }
+//            print("Added \(additionsCount) to networkAddresses")
             let allNodes = self.networkAddresses.map { (arg) -> Node in
                 let (_, node) = arg
                 return node
@@ -265,6 +277,16 @@ public class NodeManager: NodeDelegate {
     
     public init(nodeManagerDelegate: NodeManagerDelegate? = nil) {
         self.nodeManagerDelegate = nodeManagerDelegate
+        
+        let ifAddresses = getIFAddresses()
+        print("ifAddresses = \(ifAddresses)")
+        
+        NodeManager.myExternalIPAddress = getMyExternalIPAddress()
+        if let myExternalIPAddress = NodeManager.myExternalIPAddress {
+            print("myExternalIPAddress = \(myExternalIPAddress)")
+        } else {
+            print("Failed to get my external IP address 😢")
+        }
     }
         
     deinit {
@@ -312,8 +334,17 @@ public class NodeManager: NodeDelegate {
         }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         if let addressData = String(data: data, encoding: .utf8) {
-            let seedAddresses: [String] = addressData.split(separator: "\n").removingDuplicates().map { String($0) }
+            var seedAddresses: [String] = addressData.split(separator: "\n").removingDuplicates().map { String($0) }
             print("\n\(seedAddresses.count) seed addresses")
+            
+            // make sure we don't include our own external IP address
+            if let myExternalIPAddress = NodeManager.myExternalIPAddress,
+                seedAddresses.contains(myExternalIPAddress) {
+                seedAddresses.removeAll { (addressToCheck) -> Bool in
+                    addressToCheck == myExternalIPAddress
+                }
+            }
+            
 //            for (index, address) in seedAddresses.enumerated() {
 //                print("\(index)\t\(address)")
 //            }
@@ -324,7 +355,10 @@ public class NodeManager: NodeDelegate {
     
     // MARK: - Start
     
-    public func configure(with addresses: [String], and listeningPort: Int = 8333) {
+    public func configure(with addresses: [String], and listeningPort: Int = 8333, allNodes: [(TimeInterval, Node)]? = nil) {
+        if let allNodes = allNodes {
+            networkAddresses = allNodes
+        }
         self.listeningPort = listeningPort
         for address in addresses {
             if NetworkAddress.isValidAddress(address: address) {
@@ -335,7 +369,10 @@ public class NodeManager: NodeDelegate {
         }
     }
     
-    public func configure(with listOfNodes: [Node], and listeningPort: Int = -1) {
+    public func configure(with listOfNodes: [Node], and listeningPort: Int = -1, allNodes: [(TimeInterval, Node)]? = nil) {
+        if let allNodes = allNodes {
+            networkAddresses = allNodes
+        }
         self.listeningPort = listeningPort
         self.nodes.removeAll()
 //        self.nodes.append(contentsOf: nodes)
@@ -409,6 +446,59 @@ public class NodeManager: NodeDelegate {
         try? NodeManager.eventLoopGroup.syncShutdownGracefully()
         _ = NodeManager.serverChannel?.closeFuture
         print("shutdown")
+    }
+    
+    // MARK: - Helpers
+    
+    func getMyExternalIPAddress() -> String? {
+        // from https://stackoverflow.com/questions/27708887/how-to-get-the-public-ip-address-of-the-device
+        // Adjust to make attempts on other sites if any fail to return IP
+        // http://myipdoc.com/ip.php
+        // https://api.ipify.org/
+        // http://www.dyndns.org/cgi-bin/check_ip.cgi
+        // checkip.dyndns.org
+        
+        
+        guard let url = URL(string: "https://api.ipify.org/") else { return nil }
+        do {
+            let address = try String(contentsOf: url, encoding: .utf8)
+            return address
+        } catch let error {
+            print("address from url \(url.absoluteString)  Error reported:\n \(error)")
+        }
+        return nil
+    }
+
+    func getIFAddresses() -> [String] {
+        var addresses = [String]()
+
+        // Get list of all interfaces on the local machine:
+        var ifaddr : UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0 else { return [] }
+        guard let firstAddr = ifaddr else { return [] }
+
+        // For each interface ...
+        for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(ptr.pointee.ifa_flags)
+            let addr = ptr.pointee.ifa_addr.pointee
+
+            // Check for running IPv4, IPv6 interfaces. Skip the loopback interface.
+            if (flags & (IFF_UP|IFF_RUNNING|IFF_LOOPBACK)) == (IFF_UP|IFF_RUNNING) {
+                if addr.sa_family == UInt8(AF_INET) || addr.sa_family == UInt8(AF_INET6) {
+
+                    // Convert interface address to a human readable string:
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if (getnameinfo(ptr.pointee.ifa_addr, socklen_t(addr.sa_len), &hostname, socklen_t(hostname.count),
+                                    nil, socklen_t(0), NI_NUMERICHOST) == 0) {
+                        let address = String(cString: hostname)
+                        addresses.append(address)
+                    }
+                }
+            }
+        }
+
+        freeifaddrs(ifaddr)
+        return addresses
     }
 }
 
