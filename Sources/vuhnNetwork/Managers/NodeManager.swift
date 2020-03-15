@@ -278,8 +278,8 @@ public class NodeManager: NodeDelegate {
     public init(nodeManagerDelegate: NodeManagerDelegate? = nil) {
         self.nodeManagerDelegate = nodeManagerDelegate
         
-        let ifAddresses = getIFAddresses()
-        print("ifAddresses = \(ifAddresses)")
+//        let ifAddresses = getIFAddresses()
+//        print("ifAddresses = \(ifAddresses)")
         
         NodeManager.myExternalIPAddress = getMyExternalIPAddress()
         if let myExternalIPAddress = NodeManager.myExternalIPAddress {
@@ -468,7 +468,7 @@ public class NodeManager: NodeDelegate {
         }
         return nil
     }
-
+/*
     func getIFAddresses() -> [String] {
         var addresses = [String]()
 
@@ -500,6 +500,7 @@ public class NodeManager: NodeDelegate {
         freeifaddrs(ifaddr)
         return addresses
     }
+    */
 }
 
 // MARK: -
