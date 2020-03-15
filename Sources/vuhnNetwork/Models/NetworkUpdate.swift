@@ -19,6 +19,8 @@ public enum NetworkUpdateType {
     case sentPong
     case sentGetAddr
     case sentAddr
+    case sentGetHeaders
+    case sentHeaders
     
     case receivedVersion
     case receivedVerack
@@ -26,6 +28,13 @@ public enum NetworkUpdateType {
     case receivedPong
     case receivedGetAddr
     case receivedAddr
+    case receivedHeaders
+    case receivedGetHeaders
+    
+    case sentXVersion
+    case sentXVerack
+    case receivedXVersion
+    case receivedXVerack
     
     case awaitingVersion
     case awaitingVerack
@@ -59,6 +68,11 @@ public enum NetworkUpdateType {
         case .receivedVerack: return "received Verack"
         case .receivedPing: return "received Ping"
         case .receivedPong: return "received Pong"
+
+        case .sentXVersion: return "sent XVersion"
+        case .sentXVerack: return "sent XVerack"
+        case .receivedXVersion: return "received XVersion"
+        case .receivedXVerack: return "received XVerack"
             
         case .awaitingVersion: return "awaiting Version"
         case .awaitingVerack: return "awaiting Verack"
@@ -77,6 +91,11 @@ public enum NetworkUpdateType {
         case .receivedGetAddr: return "received GetAddr"
         case .receivedAddr: return "received Addr"
         case .awaitingAddr: return "awaiting Addr"
+
+        case .sentGetHeaders: return "sent GetHeaders"
+        case .sentHeaders: return "sent Headers"
+        case .receivedHeaders: return "received Headers"
+        case .receivedGetHeaders: return "received GetHeaders"
         }
     }
 }

@@ -69,7 +69,7 @@ public struct AddrMessage {
             }
             countOfAddresses = Int(numOfAddresses)
         }
-        print("Number of addresses is \(countOfAddresses)")
+//        print("Number of addresses is \(countOfAddresses)")
     
         let numberOfSuppliedAddresses = (uint8Array.count - 1) / 30
         guard countOfAddresses == numberOfSuppliedAddresses else {
@@ -79,17 +79,30 @@ public struct AddrMessage {
 
         offset += size
         var extractedNetworkAddresses = [(TimeInterval, NetworkAddress)]()
+        let currentTimeStamp = UInt64(NSDate().timeIntervalSince1970)
+//        print("current TimeStamp: \(currentTimeStamp)")
         for _ in 0..<countOfAddresses {
             size = MemoryLayout<UInt32>.size
-            let timestamp = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
+            let addressTimestamp = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
                 return soFar << 8 | UInt32(byte)
             }
+            // The returned timestamp could be a few seconds ahead of our own timestamp
+            let timedifference = currentTimeStamp > addressTimestamp ? currentTimeStamp - UInt64(addressTimestamp) : 0
+//            print("address timestamp \(addressTimestamp)  timedifference \(timedifference) = \(timedifference / 3600) hours")
+            // 86400
             
             offset += size
             let (newAddress, updatedOffset) = NetworkAddress.deserialise(uint8Array, offset: offset)
             offset = updatedOffset
             
-            extractedNetworkAddresses.append((TimeInterval(timestamp), newAddress))
+            // Only add this address if it's fresher than 3 hours
+            // Ignore if address is older than 3 hours since last check if online
+            // Also ignore is this is actually our own IP address being returned by another node
+            if let myExternalIPAddress = NodeManager.myExternalIPAddress,
+                (timedifference / 3600) < 3
+                    && newAddress.address != "0000:0000:0000:0000:0000:ffff:\(myExternalIPAddress)" {
+                extractedNetworkAddresses.append((TimeInterval(addressTimestamp), newAddress))
+            }
         }
         return AddrMessage(networkAddresses: extractedNetworkAddresses)
     }

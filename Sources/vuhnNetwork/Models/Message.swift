@@ -40,7 +40,7 @@ public struct FourCC: Codable {
 
     public enum Command: String, Codable {
         case unknown, version, verack, ping, pong
-        case getaddr, addr, inv, getheaders, sendheaders, sendcmpct
+        case getaddr, addr, inv, getheaders, sendheaders, headers, sendcmpct
         case feefilter, protoconf, xversion, xverack
         
         // Command string is a maximum 12 characters long
@@ -108,7 +108,7 @@ public struct Message: Codable {
         var commandType: FourCC.Command? = FourCC.Command.unknown
         let commandArray = uint8Array[offset..<(offset + size)].filter { $0 != 0 }
         if let commandString = String(bytes: commandArray, encoding: .utf8) {
-            // print("\(commandString)")
+             print(" - \(commandString)")
             commandType = FourCC.Command(rawValue: commandString)
             if commandType == nil {
                 commandType = .unknown
