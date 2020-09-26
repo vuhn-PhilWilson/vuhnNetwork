@@ -87,34 +87,37 @@ This is done by the following:
 import vuhnNetwork
 ```
 
-### Creating a Server.
-
-The current example creates a default `Socket` instance and then *immediately* starts listening on port `1337`.
-```swift
-    runEchoServer()
-```
-
 See the **vuhnKredit** program for an example of using and running **vuhnNetwork**.
+
+## Using vuhnKredit
+
 After downloading **vuhnKredit**, run from the command line:
 
 ```
 % cd <path-to-vuhnKredit-clone>
-% swift run vuhnKredit "echo server"
+% swift run vuhnKredit
 ```
 
-You can then open up other command prompts or terminals and connect to the server running from **vuhnKredit**:
+It defaults to listening on port 8333
 
+Change the default listening port by using the -listeningPort parameter
 ```
-% telnet localhost 1337
-```
-or
-```
-% nc localhost 1337
+% swift run vuhnKredit -listeningPort 8555
 ```
 
-The server echos back any text sent from connected `telnet` or `nc` sessions.
-Sending `QUIT` will close that specific session.
-Sending `SHUTDOWN` from any connected session will shut the server down and all connected sessions will close.
+Connect to specific nodes by using the -connectTo parameter
+```
+% swift run vuhnKredit -connectTo 18.195.144.149:8333
+```
+
+You can run multiple nodes on the same computer by setting different ports
+Just make sure the selected port is the same one the other node is listening to
+```
+% swift run vuhnKredit -listeningPort 8555
+% swift run vuhnKredit -listeningPort 9333 -connectTo 18.195.144.149:8555
+% swift run vuhnKredit -listeningPort 8888 -connectTo 63.143.34.98:9333
+% swift run vuhnKredit -listeningPort 8333 -connectTo 63.143.34.98:9333
+```
 
 ## License
 

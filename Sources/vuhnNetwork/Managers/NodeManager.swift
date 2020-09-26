@@ -106,6 +106,7 @@ final class ServerInboundHandler: ChannelInboundHandler {
 
 public protocol NodeManagerDelegate {
     func addressesUpdated(for nodes: [Node])
+    func blockHeadersUpdated(for headers: [Header])
 }
 
 public class NodeManager: NodeDelegate {
@@ -223,13 +224,100 @@ public class NodeManager: NodeDelegate {
                 }
             }
             if additionsCount == 0 { return }
-//            print("Added \(additionsCount) to networkAddresses")
+            print("Added \(additionsCount) to networkAddresses")
             let allNodes = self.networkAddresses.map { (arg) -> Node in
                 let (_, node) = arg
                 return node
             }
             self.nodeManagerDelegate?.addressesUpdated(for: allNodes)
         }
+    }
+    
+    public func didReceiveBlockHeaders(_ node: Node, _ newHeaders: [Header]) {
+        print("\(#function) [\(#line)] \(node.nameShortened) headers.count = \(headers.count) newHeaders.count = \(newHeaders.count)")
+        if newHeaders.count == 0 { return }
+        DispatchQueue.main.async {
+            print("\(#function) [\(#line)] \(node.nameShortened): Begun async update of headers")
+            var mutableHeaders = newHeaders
+            var headersCount = self.headers.count + 1
+            var additionsCount = 0
+            
+            // If headers are to be appended to self.headers
+            // Then the first blockheader shoud have a
+            // previousBlock hash that's the same as the
+            // last block hash in self.headers
+            
+            // Actually:
+            // Check if any prevBlock in new headers incode the
+            // last known block hash
+            // As the blocks may be out of timestamp order
+            
+            if self.headers.count > 0,
+                let lastKnownHeader = self.headers.last {
+                if !mutableHeaders.contains(where: { (arg0) -> Bool in
+                    return arg0.prevBlock == lastKnownHeader.blockHash
+                }) {
+                    
+                    print("\(#function) [\(#line)] \(node.nameShortened): Last known header block hash is \(CryptoUtils.hexString(from: [UInt8](lastKnownHeader.blockHash)))")
+                    print("\(#function) [\(#line)] \(node.nameShortened): Was not found in any new header's prevgetBlockHeadersBlock hash")
+                    print("\(#function) [\(#line)] \(node.nameShortened): Not adding these new headers")
+                    
+                    return
+                }
+            } else if self.headers.count > 0 {
+                print("\(#function) [\(#line)] \(node.nameShortened): Could not retrieve last known block hash")
+                print("\(#function) [\(#line)] \(node.nameShortened): Not adding these new headers")
+                
+                return
+            }
+            
+            // Date November 16, 2018 4:52 AM
+            // Block height 556766
+            // Block hash 00000000000000000102d94fde9bd0807a2cc7582fe85dd6349b73ce4e8d9322
+            // Is when BSV split from BCH
+            // Both BCH and BSV share the same 556766 block hash
+            // Must make sure correct chain is followed
+            
+            // BCH Block height 556767
+            // Block hash 0000000000000000004626ff6e3b936941d341c5932ece4357eeccac44e6d56c
+            
+            // BSV Block height 556767
+            // Block hash 000000000000000001d956714215d96ffc00e0afda4cd0a96c96f8d802b1662b
+            
+            // Reject any new header ist if it has the non-chain block hash
+            if mutableHeaders.contains(where: { (arg0) -> Bool in
+                return CryptoUtils.hexString(from: [UInt8](arg0.blockHash)) == "000000000000000001d956714215d96ffc00e0afda4cd0a96c96f8d802b1662b"
+            }) {
+                // BCH/BSV split time
+                print("\(#function) [\(#line)] \(node.nameShortened): BSV block hash 000000000000000001d956714215d96ffc00e0afda4cd0a96c96f8d802b1662b found")
+                print("\(#function) [\(#line)] \(node.nameShortened): Not adding these new headers")
+                return
+            }
+            
+            print("\(#function) [\(#line) \(node.nameShortened): Adding new headers to current headers list")
+            for index in 0..<mutableHeaders.count {
+                    mutableHeaders[index].blockHeight = UInt32(headersCount)
+                    self.headers.append(mutableHeaders[index])
+                    headersCount += 1
+                    additionsCount += 1
+            }
+            print("\(#function) [\(#line) \(node.nameShortened): Completed adding new headers to current headers list")
+
+            if additionsCount == 0 {
+                print("No additional headers added. headersCount still at \(headersCount)")
+                return
+            }
+            print("Added \(additionsCount) to headers")
+
+            print("self.headers.count = \(self.headers.count)")
+            print("mutableHeaders.count = \(mutableHeaders.count)")
+
+            self.nodeManagerDelegate?.blockHeadersUpdated(for: mutableHeaders)
+        }
+    }
+    
+    public func getBlockHeaders(_ node: Node) -> [Header] {
+        return self.headers
     }
     
     // MARK: -
@@ -251,6 +339,7 @@ public class NodeManager: NodeDelegate {
     
     
     public var networkAddresses = [(TimeInterval, Node)]()
+    public var headers = [Header]()
     
     static let bufferSize = 4096
     
@@ -355,9 +444,15 @@ public class NodeManager: NodeDelegate {
     
     // MARK: - Start
     
-    public func configure(with addresses: [String], and listeningPort: Int = 8333, allNodes: [(TimeInterval, Node)]? = nil) {
+    public func configure(with addresses: [String],
+                          and listeningPort: Int = 8333,
+                          allNodes: [(TimeInterval, Node)]? = nil,
+                          allHeaders: [Header]? = nil) {
         if let allNodes = allNodes {
             networkAddresses = allNodes
+        }
+        if let allHeaders = allHeaders {
+            headers = allHeaders
         }
         self.listeningPort = listeningPort
         for address in addresses {
@@ -369,9 +464,15 @@ public class NodeManager: NodeDelegate {
         }
     }
     
-    public func configure(with listOfNodes: [Node], and listeningPort: Int = -1, allNodes: [(TimeInterval, Node)]? = nil) {
+    public func configure(with listOfNodes: [Node],
+                          and listeningPort: Int = -1,
+                          allNodes: [(TimeInterval, Node)]? = nil,
+                          allHeaders: [Header]? = nil) {
         if let allNodes = allNodes {
             networkAddresses = allNodes
+        }
+        if let allHeaders = allHeaders {
+            headers = allHeaders
         }
         self.listeningPort = listeningPort
         self.nodes.removeAll()

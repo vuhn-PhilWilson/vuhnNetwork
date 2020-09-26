@@ -12,9 +12,11 @@ public struct GetHeadersMessage {
 //    32+    block locator hashes    char[32]    block locator object; newest back to genesis block (dense to start, but then sparse)
 //    32    hash_stop    char[32]    hash of the last desired block header; set to zero to get as many blocks as possible (2000)
     
+    public static let genesisBlockHash = Data([111, 226, 140, 10, 182, 241, 179, 114, 193, 166, 162, 70, 174, 99, 247, 79, 147, 30, 131, 101, 225, 90, 8, 156, 104, 214, 25, 0, 0, 0, 0, 0])
+    
     public init() { }
     
-    public init(blockLocatorHashes: [Data]) {
+    public init(blockLocatorHashes: [Data] = [GetHeadersMessage.genesisBlockHash]) {
         self.blockLocatorHashes = blockLocatorHashes
     }
     
@@ -24,10 +26,14 @@ public struct GetHeadersMessage {
     /// Block locator object; newest back to genesis block (dense to start, but then sparse)
     // Default to Genesis block hash
 //    var blockLocatorHashes: [String] = ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"]
+    // 6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000
+    
 //var blockLocatorHashes: [Data] = [Data([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])]
     
+    
 //    var blockLocatorHashes: [Data] = [Data([0x00,0x00,0x00,0x00,0x00,0x19,0xd6,0x68,0x9c,0x08,0x5a,0xe1,0x65,0x83,0x1e,0x93,0x4f,0xf7,0x63,0xae,0x46,0xa2,0xa6,0xc1,0x72,0xb3,0xf1,0xb6,0x0a,0x8c,0xe2,0x6f])]
-    var blockLocatorHashes: [Data] = [Data([111, 226, 140, 10, 182, 241, 179, 114, 193, 166, 162, 70, 174, 99, 247, 79, 147, 30, 131, 101, 225, 90, 8, 156, 104, 214, 25, 0, 0, 0, 0, 0])]
+//    var blockLocatorHashes: [Data] = [Data([111, 226, 140, 10, 182, 241, 179, 114, 193, 166, 162, 70, 174, 99, 247, 79, 147, 30, 131, 101, 225, 90, 8, 156, 104, 214, 25, 0, 0, 0, 0, 0])]
+    var blockLocatorHashes: [Data] = [GetHeadersMessage.genesisBlockHash]
     
     
     
@@ -45,10 +51,17 @@ public struct GetHeadersMessage {
         
         var countOfBlockLocatorHashes = 1
         
+        print("\(#function) [\(#line)] 🍔 blockLocatorHashes.count == \(blockLocatorHashes.count)")
+
+        let testData = blockLocatorHashes[0];
+        print("\(#function) [\(#line)] 🍔 blockLocatorHashes[0].count == \(testData.count)")
+
+        
         if blockLocatorHashes.count > 0 {
             countOfBlockLocatorHashes = blockLocatorHashes.count
             if countOfBlockLocatorHashes > 2000 { countOfBlockLocatorHashes = 2000 }
         }
+        print("\(#function) [\(#line)] 🍔")
         print("Number of Block Locator Hashes is \(countOfBlockLocatorHashes)")
         
         var data = Data()
@@ -97,7 +110,7 @@ public struct GetHeadersMessage {
         
 
         offset += size
-        
+        size = MemoryLayout<UInt8>.size
         var countOfBlockLocatorHashes: Int = 0
         let numOfBlockLocatorHashes = uint8Array[offset..<(offset + size)].reversed().reduce(0) { soFar, byte in
             return soFar << 8 | UInt8(byte)
