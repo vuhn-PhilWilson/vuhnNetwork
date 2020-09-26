@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Cryptor
 import CoreFoundation
 #if os(Linux)
     import Glibc
@@ -26,6 +27,8 @@ public protocol NodeDelegate {
     func didDisconnectNode(_ node: Node)
     
     func didReceiveNetworkAddresses(_ node: Node, _ addresses: [(TimeInterval, NetworkAddress)])
+    func didReceiveBlockHeaders(_ node: Node, _ headers: [Header])
+    func getBlockHeaders(_ node: Node) -> [Header]
 }
 
 public class NodeInboundHandler: ChannelInboundHandler {
@@ -234,6 +237,7 @@ public class Node: NSObject {
                 receiveAddrMessage(dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
                 break
             case .inv:
+// TODO: -               process inv messages next
                 break
             case .getheaders:
                 print("\(nameShortened) <getheaders> payload length:\(payloadArrayLength) data:\(payloadByteArray)")
@@ -241,7 +245,8 @@ public class Node: NSObject {
             case .sendheaders:
                 break
             case .headers:
-            print("\(nameShortened) <headers> payload length:\(payloadArrayLength) data:\(payloadByteArray)")
+            print("\(nameShortened) <headers> payload length:\(payloadArrayLength)")
+                receiveHeadersMessage(dataByteArray: payloadByteArray, arrayLength: UInt32(payloadArrayLength))
                 break
             case .sendcmpct:
                 break
@@ -351,7 +356,7 @@ public class Node: NSObject {
             if address.contains(prefix) {
                 shortenedAddress.removeFirst(prefix.count)
             }
-            return "\(shortenedAddress):\(port)"
+            return "\(shortenedAddress):\(port):\(theirUserAgent ?? "")"
         }
     }
     
@@ -362,7 +367,7 @@ public class Node: NSObject {
             if address.contains(prefix) {
                 shortenedAddress.removeFirst(prefix.count)
             }
-            return "\(shortenedAddress)"
+            return "\(shortenedAddress):\(port)"
         }
     }
     
@@ -407,7 +412,8 @@ public class Node: NSObject {
     
     public func serializeForDisk() -> Data {
         var data = Data()
-        data += "\(nameShortened),".data(using: .utf8) ?? Data([UInt8(0x00)])
+        data += "\(addressShortened),".data(using: .utf8) ?? Data([UInt8(0x00)])
+        data += "\(theirUserAgent ?? ""),".data(using: .utf8) ?? Data([UInt8(0x00)])
         data += "\(attemptsToConnect),".data(using: .utf8) ?? Data()
         data += "\(lastAttempt),".data(using: .utf8) ?? Data()
         data += "\(lastSuccess),".data(using: .utf8) ?? Data()
@@ -641,12 +647,21 @@ public class Node: NSObject {
     public func sendGetHeadersMessage() {
         print("\(nameShortened) sendGetHeadersMessage")
         sentCommand = .getheaders
-        //        print("\(nameShortened) sent \(sentCommand)  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  getaddr   >>>>>>>>>  ")
         sentNetworkUpdateType = .sentGetHeaders
         sentGetHeaders = true
         receivedGetHeadersResponse = false
         
-        let payload = GetHeadersMessage().serialize()
+        var lastHeaderBlockHash = GetHeadersMessage.genesisBlockHash
+        if let lastHeader = nodeDelegate?.getBlockHeaders(self).last {
+            lastHeaderBlockHash = lastHeader.blockHash
+        }
+        let hexString = CryptoUtils.hexString(from: [UInt8](lastHeaderBlockHash).reversed())
+        print("\(#function) [\(#line)] lastHeaderBlockHash = \(hexString)")
+        
+        let payload = GetHeadersMessage(
+            blockLocatorHashes: [lastHeaderBlockHash]
+        ).serialize()
+        
 //        let payload = GetHeadersMessage(version: UInt32(version), blockLocatorHashes: [""]).serialize()
         let message = Message(command: sentCommand, length: UInt32(payload.count), checksum: payload.doubleSHA256ToData[0..<4], payload: payload)
         
@@ -655,6 +670,117 @@ public class Node: NSObject {
                 ? inputChannel
                 : outputChannel,
             message)
+    }
+    
+    public func receiveHeadersMessage(dataByteArray: [UInt8], arrayLength: UInt32) {
+        guard let headersMessage = HeadersMessage.deserialise(dataByteArray) else {
+            print("👤 \(#function) [\(#line)] \(name) failed to extract headers 😢")
+            return
+        }
+        let headers: [Header] = headersMessage.blockHeaders
+        let numberOfHeaders = headers.count
+        print("\(nameShortened): 👤 received \(numberOfHeaders) headers")
+        
+        if numberOfHeaders == 0 {
+            return
+        }
+
+        // Headers only point back to the previous block via its block hash.
+        // We can only traverse backwards from any particular block
+        // This is fine when you have a block header and want to confirm
+        // it links all the way back to the genesis block or any other
+        // previous block that's been locked in ( checkmarked )
+        // This isn't so fine if you have an arbitrary block and
+        // want to know if it links forward to a future known block
+        
+        // If you have an array of block headers,
+        // if they're ordered by timestamp,
+        // then each prevBlock should be the hash
+        // of the previous block header
+        
+        // Due to timestamps being allowed up to 2 hours in future
+        // a timestamp between blocks may not be in the same order
+        // as they're linked together
+        // So any sorting should be done via
+        // block prevBlock hashes pointing to a blocks hash
+        
+        guard let allHeaders = nodeDelegate?.getBlockHeaders(self)
+            else {
+                print("\(nameShortened): Error: allHeaders is nil")
+                return
+        }
+
+        // The last block should point to the previous block
+        // The first block should point back to either
+        // the genesis block ( if this is the first set of blocks received )
+        // or to the last block in the total list
+        
+        // 6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000
+        // 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
+        let genesisBlockHash = "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000"
+        var bestBlockHash = genesisBlockHash
+        
+        if allHeaders.count > 0,
+            let allHeadersLast = allHeaders.last {
+            bestBlockHash = CryptoUtils.hexString(from: [UInt8](allHeadersLast.blockHash))
+        }
+        print("\(nameShortened): allHeaders.count = \(allHeaders.count)")
+        print("\(nameShortened): bestBlockHash = \(bestBlockHash)")
+        
+        // We're only interested in a new list of headers which also link to
+        // the current best block
+        
+        var sortedArray = [Header]()
+        var nextBlock: Header?
+        if !headers.contains(where: { (arg0) -> Bool in
+            
+            if CryptoUtils.hexString(from: [UInt8](arg0.prevBlock)) == bestBlockHash {
+                nextBlock = arg0
+                sortedArray.append(arg0)
+                return true
+            }
+            return false
+        }) {
+            print("\(nameShortened): New headers do not contain bestBlockHash \(bestBlockHash)")
+            print("\(nameShortened): Not adding these headers")
+            
+            print("\(nameShortened): \(CryptoUtils.hexString(from: [UInt8](headers.first!.prevBlock)))")
+            return
+        }
+        
+        
+        print("\(#function) [\(#line)]  \(nameShortened): sortedArray.count \(sortedArray.count)")
+        
+        
+        print("\(nameShortened): New headers contain bestBlockHash \(bestBlockHash)")
+        if let nextBlock = nextBlock {
+            print("\(nameShortened): nextBlock \(CryptoUtils.hexString(from: [UInt8](nextBlock.blockHash)))     its prevBlock = \(CryptoUtils.hexString(from: [UInt8](nextBlock.prevBlock)))")
+            print("\(nameShortened): nextBlock \(CryptoUtils.hexString(from: [UInt8](nextBlock.blockHash).reversed()))     its prevBlock = \(CryptoUtils.hexString(from: [UInt8](nextBlock.prevBlock).reversed()))")
+        }
+        
+        print("\(nameShortened): Sorting new headers")
+
+        for _ in headers {
+            
+            let foundNextBlock = headers.filter({ (header) -> Bool in
+                header.prevBlock == nextBlock?.blockHash
+            })
+            if let foundNextBlock = foundNextBlock.first {
+                sortedArray.append(foundNextBlock)
+                nextBlock = foundNextBlock
+            } else {
+                break
+            }
+        }
+        print("\(nameShortened): Completed Sorting new headers")
+        print("   sortedArray.count = \(sortedArray.count) ")
+
+        nodeDelegate?.didReceiveBlockHeaders(self, sortedArray)
+
+        // Restart timer to obtain next batch of headers
+        sentGetHeaders = false
+        receivedGetHeadersResponse = false
+        startGetHeadersTimer()
     }
         
     // MARK: - NIO
@@ -684,8 +810,9 @@ public class Node: NSObject {
             failedToConnect += 1
             return false
         }
-        if let outputChannel = outputChannel {
-            print("This Client connected to Remote Server: \(outputChannel.remoteAddress!)\n. Press ^C to exit.")
+        if let outputChannel = outputChannel,
+            let remoteAddress = outputChannel.remoteAddress {
+            print("This Client connected to Remote Server: \(remoteAddress)\n. Press ^C to exit.")
             lastSuccess = UInt64(timestamp)
             connectionFirstMadeTimeInterval = NSDate().timeIntervalSince1970
             if sentVersion == false {
@@ -733,6 +860,10 @@ public class Node: NSObject {
     }
 
     public func startGetAddrTimer() {
+        if self.shouldKeepRunning == false {
+            self.shutDownGetAddrTimer()
+            return
+        }
         getAddrTimer = DispatchSource.makeTimerSource(flags: [], queue: DispatchQueue.main)
         
         let delay: DispatchTime = .now() + .seconds(Int(getAddrRandomDuration))
@@ -751,7 +882,10 @@ public class Node: NSObject {
     public func startGetHeadersTimer() {
         let getHeadersTimer = DispatchSource.makeTimerSource(flags: [], queue: DispatchQueue.main)
         
-        let deadline: DispatchTime = .now() + .seconds(Int(Double.random(in: 10 ... 40)))
+//        let deadline: DispatchTime = .now() + .seconds(Int(Double.random(in: 10 ... 300)))
+//        let deadline: DispatchTime = .now() + .seconds(Int(Double.random(in: 10 ... 40)))
+        let deadline: DispatchTime = .now() + .seconds(Int(Double.random(in: 5 ... 10)))
+        
         getHeadersTimer.schedule(deadline: deadline)
         getHeadersTimer.setEventHandler
         {
